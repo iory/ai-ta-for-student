@@ -6,7 +6,7 @@
 #   ta fix [メモ]         直前のエラー情報 (コマンド/出力/画面/ROSログ/環境) を集めて相談
 #   ta run <cmd ...>      出力を記録しながらコマンドを実行 (失敗したら ta fix で相談)
 #   ta call [メモ]        人間の TA・先生を呼ぶ (エラー情報を添付してダッシュボードに通知)
-#   ta review <file.py>   実機に出す前のチェック項目に照らしてコードを見てもらう (合否は人の TA)
+#   ta review <file.py>   実機に出す前のチェック項目に照らしてコードを見てもらう
 #   ta context            ta fix が送る情報を表示だけする (送信しない)
 #   ta usage              今日の利用額と上限
 #   ta doctor             サーバー接続・キー・資料の場所を確認
@@ -304,17 +304,18 @@ $ctx"
 }
 
 # Before the real robot: the AI goes through the checklist in the docs and
-# points at lines; it does not pass or fail anything (a human TA does) and
-# does not edit the file, so the student has to make and explain the changes.
+# points at lines; it does not edit the file, so the student makes the changes.
+# Items code cannot show (people nearby, someone at the power switch) are left
+# for the student to confirm.
 cmd_review() {
   [[ $# -ge 1 ]] || die "使い方: ta review <ファイル.py>"
   local file; file=$(realpath -e "$1" 2>/dev/null) || die "ファイルがありません: $1"
   launch_claude "ta review: 実機で動かす前のチェックをお願いします。対象: $file
 
-資料 jedy-demos-2026.md の「実機に出す前のチェック」の各項目について，このファイルの該当行（file:line）と，問題があればその理由・直し方の方針を書いてください。
+資料 robot-programming-2-2026.md の「実機に出す前のチェック」の各項目について，このファイルの該当行（file:line）と，問題があればその理由・直し方の方針を書いてください。
 - ファイルは書き換えないでください（直すのは学生）。
-- 「実機に出してよい」という判定はしないでください。判定は人の TA が，学生の説明を聞いてから行います。
-- 最後に，人の TA に説明するときに学生が答えられるべき質問を 2〜3 個挙げてください。"
+- コードから分かる項目に問題がなければ，そう書いてください。
+- コードから分からない項目（周りに人や机が無いか，止まらないときに電源を切れる人がそばにいるか）は，学生に確かめるよう書いてください。"
 }
 
 cmd_run() {

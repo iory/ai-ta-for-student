@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 | `ta` / `ta "質問"` | AI TA と会話を始める．演習資料を読んで答える |
 | `ta fix [メモ]` | 直前のエラーを集めて直し方を聞く: 最後に失敗したコマンド，`ta run` の出力，tmux / byobu の画面，最新の launch のログ，Python の Traceback，ROS の環境変数 (どれも 30 分以内のもの) |
 | `ta run <コマンド>` | コマンドの出力を全部記録しながら実行する．長い出力を `ta fix` に渡したいときに使う |
-| `ta review <ファイル.py>` | 実機で動かす前のチェック項目に照らしてコードを見てもらう (合否は人の TA が決める) |
+| `ta review <ファイル.py>` | 実機で動かす前のチェック項目に照らしてコードを見てもらう |
 | `ta call [メッセージ]` | 人の TA・教員を呼ぶ．エラーの情報も一緒に届く |
 | `ta context` | `ta fix` が送る内容を表示するだけ (何も送らない) |
 | `ta usage` | 今日の利用額と上限 |
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 
 - コマンドが失敗すると `[ai-ta] exit N — "ta fix" で…` という 1 行が出る．`AITA_QUIET=1` で消せる．
 - AI TA がコマンドを実行したりファイルを書き換えたりするときは，毎回確認を求める．ロボットを動かすコマンドを AI が勝手に実行することはない．
-- **実機で動かしてよいかを AI は判定しない．** 実機に出す前は `ta review` と人の TA の確認を受ける．
+- 実機で動かす前に，`ta review` でコードを見てもらうとよい．
 - 焦げたにおい・煙・発熱・けがなど危ないときは，AI に聞く前にロボットの電源を切り，`ta call` か近くの TA を呼ぶ．
 
 ## 記録について
