@@ -13,14 +13,14 @@
 ## インストール
 
 ```bash
-git clone https://github.com/iory/ai-ta-for-student ~/ai-ta-for-student
-cd ~/ai-ta-for-student
-./install.sh          # ta コマンド，bash のフック，Claude Code (無ければ) を入れる
+curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install.sh | bash
 source ~/.bashrc
 ta login              # 表示されたコードを github.com/login/device に入力して承認する
 ta doctor             # 接続・キー・資料の場所を確認する (全部 ✓ になればよい)
 ```
 
+- `install.sh` は `ta` コマンド，bash のフック，Python の例外を記録するフック，Claude Code (無ければ) を入れる．
+  中身を見てから入れたいときは `git clone https://github.com/iory/ai-ta-for-student` して `./install.sh` でも同じ．
 - `ta: command not found` と出るときは `~/.local/bin` が PATH に入っていない．
   `export PATH=$HOME/.local/bin:$PATH` を `~/.bashrc` に足す (普通にログインした Ubuntu では自動で入る)．
 - 初めて起動したフォルダでは「このフォルダを信頼するか」と聞かれるので **Yes, I trust this folder** を選ぶ．

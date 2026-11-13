@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 # Install the AI TA client for the current user.
 #
-#   ./install.sh                 # install ta, hook, Claude Code
-#   ./install.sh <keyfile>       # ... and set the distributed key
+#   curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install.sh | bash
+#   ./install.sh                 # from a clone: install ta, hook, Claude Code
+#   ./install.sh <keyfile>       # ... and set a distributed key file
 set -euo pipefail
 
-HERE=$(cd "$(dirname "$0")" && pwd)
+# The files to install sit next to this script in a clone. Piped from curl
+# there is no such directory: fetch the repository's tarball into a
+# temporary one (AITA_CLIENT_TARBALL to use another).
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
+if [[ -z $HERE || ! -f $HERE/ta || ! -f $HERE/ta-prompt.md ]]; then
+  TARBALL=${AITA_CLIENT_TARBALL:-https://github.com/iory/ai-ta-for-student/archive/refs/heads/main.tar.gz}
+  HERE=$(mktemp -d)
+  trap 'rm -rf "$HERE"' EXIT
+  echo "ダウンロード: $TARBALL"
+  curl -fsSL "$TARBALL" | tar -xz -C "$HERE" --strip-components=1
+  [[ -f $HERE/ta ]] || { echo "ダウンロードしたファイルに ta がありません: $TARBALL" >&2; exit 1; }
+fi
 BIN=$HOME/.local/bin
 SHARE=$HOME/.local/share/ai-ta
 CONF=$HOME/.config/ai-ta
@@ -106,6 +118,6 @@ fi
 if [[ $# -ge 1 ]]; then
   "$BIN/ta" setup "$1"
 else
-  echo "次に配布されたキーファイルを設定: ta setup <keyfile>"
+  echo "次に: ta login (GitHub でログインして自分のキーを設定。配られたキーファイルなら ta setup <keyfile>)"
 fi
 echo "完了。新しいターミナルを開くか 'source ~/.bashrc' してから 'ta doctor' で確認してください。"
