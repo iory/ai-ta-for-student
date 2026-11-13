@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+# ta -- 知能ロボット行動プログラミング演習 AI TA (Claude Code via the course gateway)
+#
+#   ta                    AI TA と対話を始める
+#   ta "質問"             質問を付けて始める
+#   ta fix [メモ]         直前のエラー情報 (コマンド/出力/画面/ROSログ/環境) を集めて相談
+#   ta run <cmd ...>      出力を記録しながらコマンドを実行 (失敗したら ta fix で相談)
+#   ta call [メモ]        人間の TA・先生を呼ぶ (エラー情報を添付してダッシュボードに通知)
+#   ta review <file.py>   実機に出す前のチェック項目に照らしてコードを見てもらう (合否は人の TA)
+#   ta context            ta fix が送る情報を表示だけする (送信しない)
+#   ta usage              今日の利用額と上限
+#   ta doctor             サーバー接続・キー・資料の場所を確認
+#   ta login              GitHub でログインして自分のキーを設定 (再実行で発行し直し)
+#   ta setup <keyfile>    配布されたキーファイルを設定
+set -euo pipefail
+
+readonly PROG=ta
+readonly AITA_CONFIG_DIR=${AITA_CONFIG_DIR:-$HOME/.config/ai-ta}
+readonly AITA_SHARE_DIR=${AITA_SHARE_DIR:-$HOME/.local/share/ai-ta}
+readonly AITA_CACHE_DIR=${AITA_CACHE_DIR:-$HOME/.cache/ai-ta}
+readonly AITA_ENV_FILE=$AITA_CONFIG_DIR/env
+# Where `ta login` asks for a key when no key file is set up yet.
+readonly AITA_DEFAULT_SERVER=${AITA_DEFAULT_SERVER:-https://jsk-aita.japaneast.cloudapp.azure.com}
+readonly AITA_MODEL=${AITA_MODEL:-ta-main}
+readonly AITA_FAST_MODEL=${AITA_FAST_MODEL:-ta-fast}
+# How much of each source goes into `ta fix` (lines).
+readonly CTX_RUN_LINES=${AITA_CTX_RUN_LINES:-200}
+readonly CTX_PANE_LINES=${AITA_CTX_PANE_LINES:-150}
+readonly CTX_OTHER_PANE_LINES=${AITA_CTX_OTHER_PANE_LINES:-60}
+readonly CTX_ROSLOG_LINES=${AITA_CTX_ROSLOG_LINES:-80}
+readonly CTX_PYERR_LINES=${AITA_CTX_PYERR_LINES:-80}
+readonly CTX_MAX_AGE_MIN=${AITA_CTX_MAX_AGE_MIN:-30}
+readonly CTX_MAX_BYTES=${AITA_CTX_MAX_BYTES:-60000}
+readonly CTX_ROBOT_STATE_S=${AITA_CTX_ROBOT_STATE_S:-3}
+
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+info() { printf '\e[36m[ai-ta]\e[0m %s\n' "$*" >&2; }
+
+load_env() {
+  [[ -f $AITA_ENV_FILE ]] || die "キーが未設定です。ta login で GitHub にログインして設定してください"
+  # shellcheck disable=SC1090
+  source "$AITA_ENV_FILE"
+  [[ -n ${AITA_BASE_URL:-} && -n ${AITA_KEY:-} ]] || die "$AITA_ENV_FILE に AITA_BASE_URL / AITA_KEY がありません"
+}
+
+# Course docs: explicit AITA_DOCS, else the usual clone locations.
+find_docs() {
+  local d
+  for d in "${AITA_DOCS:-}" \
+           "$HOME/ros2_ws/src/robot-programming/docs" \
+           "$HOME/catkin_ws/src/robot-programming/docs" \
+           "$HOME/robot-programming/docs"; do
+    [[ -n $d && -f $d/index.md ]] && { printf '%s\n' "$d"; return 0; }
+  done
+  return 1
+}
+
+# Mask anything that looks like a credential before it leaves the machine.
+redact() {
+  sed -E \
+    -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b\][^\x07]*\x07//g' -e 's/\r$//' \
+    -e 's/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/\1…[redacted]/g' \
+    -e 's/(AIza)[A-Za-z0-9_-]{20,}/\1…[redacted]/g' \
+    -e 's/((api[_-]?key|token|secret|password|passwd|AITA_KEY)["'"'"' ]*[:=] *["'"'"']?)[^ "'"'"']+/\1[redacted]/Ig'
+}
+
+# Ages in minutes of a file.
+age_min() { echo $(( ( $(date +%s) - $(stat -c %Y "$1") ) / 60 )); }
+
+section() { printf '\n### %s\n```\n' "$1"; cat; printf '```\n'; }
+
+# One line per `ros2 launch` / `gz sim` of this user: pid, age, ROS_DOMAIN_ID,
+# GZ_PARTITION, command. "ORPHAN?" marks a gz server with no launch parent.
+running_robot_procs() {
+  local pid etimes args env dom part parent mark
+  while read -r pid etimes args; do
+    env=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || continue
+    dom=$(sed -n 's/^ROS_DOMAIN_ID=//p' <<< "$env"); part=$(sed -n 's/^GZ_PARTITION=//p' <<< "$env")
+    mark=""
+    if [[ $args == "gz sim"* ]]; then
+      parent=$(ps -o args= -p "$(ps -o ppid= -p "$pid" | tr -d ' ')" 2>/dev/null)
+      [[ $parent == *"ros2 launch"* || $parent == *"gz sim"* || $parent == *ruby* ]] || mark="  ORPHAN? (親の launch が無い)"
+    fi
+    printf 'pid=%s 起動%d分前 domain=%s partition=%s  %s%s\n' "$pid" "$((etimes / 60))" \
+      "${dom:-0}" "${part:-}" "${args:0:110}" "$mark"
+  done < <(ps -u "$(id -u)" -o pid=,etimes=,args= | grep -E 'ros2 launch|gz sim' | grep -vE 'grep|ruby ' || true)
+}
+
+collect_context() {
+  local f ec ts cwd cmd
+  echo "<ta-context>"
+  echo "収集時刻: $(date '+%F %T')  (ta fix が自動収集)"
+
+  f=$AITA_CACHE_DIR/last_failed
+  if [[ -f $f && $(age_min "$f") -le $CTX_MAX_AGE_MIN ]]; then
+    IFS=$'\t' read -r ec ts cwd cmd < "$f"
+    printf '\n### 直前に失敗したコマンド (%s分前)\n```\n$ %s\n(exit %s, cwd %s)\n```\n' \
+      "$(age_min "$f")" "$cmd" "$ec" "$cwd"
+  fi
+
+  f=$AITA_CACHE_DIR/runs/latest.log
+  if [[ -f $f && $(age_min "$f") -le $CTX_MAX_AGE_MIN ]]; then
+    local meta=$AITA_CACHE_DIR/runs/latest.meta
+    [[ -f $meta ]] && sed 's/^/# /' "$meta" | section "ta run の記録 (メタ情報)"
+    tail -n "$CTX_RUN_LINES" "$f" | section "ta run の出力 (末尾 $CTX_RUN_LINES 行)"
+  fi
+
+  if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then
+    local cur pid pcmd n
+    cur=${TMUX_PANE:-$(tmux display-message -p '#{pane_id}')}
+    while IFS=$'\t' read -r pid pcmd; do
+      if [[ $pid == "$cur" ]]; then n=$CTX_PANE_LINES; else n=$CTX_OTHER_PANE_LINES; fi
+      tmux capture-pane -p -J -t "$pid" -S "-$n" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
+        | section "tmux/byobu 画面 $pid ($pcmd)$([[ $pid == "$cur" ]] && echo ' ← ta を実行した画面')"
+    done < <(tmux list-panes -F $'#{pane_id}\t#{pane_current_command}')
+  fi
+
+  local roslog
+  roslog=$(ls -td "$HOME"/.ros/log/*/ 2>/dev/null | head -1 || true)
+  if [[ -n $roslog && -f $roslog/launch.log && $(age_min "$roslog/launch.log") -le $CTX_MAX_AGE_MIN ]]; then
+    tail -n "$CTX_ROSLOG_LINES" "$roslog/launch.log" \
+      | section "最新の ros2 launch ログ ${roslog/#$HOME/\~}launch.log ($(age_min "$roslog/launch.log")分前)"
+  fi
+
+  # Uncaught Python exceptions recorded by aita_pyhook (any terminal, ros2 run nodes too).
+  f=$AITA_CACHE_DIR/py_errors/latest.txt
+  if [[ -f $f && $(age_min "$f") -le $CTX_MAX_AGE_MIN ]]; then
+    tail -n "$CTX_PYERR_LINES" "$f" | section "最新の Python 例外 Traceback ($(age_min "$f")分前)"
+  fi
+
+  # Running robot launches / Gazebo servers of this user: two at once, or a
+  # Gazebo left over after its launch ended, explain many "it doesn't move".
+  local procs
+  procs=$(running_robot_procs)
+  if [[ -n $procs ]]; then
+    section "動いている ros2 launch / Gazebo (このユーザー)" <<< "$procs"
+  fi
+
+  # Servos that do not answer, faults, diagnostics: what RViz shows as red
+  # links, as text. Only with a robot up -- otherwise it would wait for nothing.
+  if [[ -n $procs ]] && command -v ros2 >/dev/null; then
+    timeout 10 python3 "$AITA_SHARE_DIR/aita_robot_state.py" --seconds "$CTX_ROBOT_STATE_S" 2>&1 \
+      | grep -v '^\[' | section "ロボットの状態 (サーボの応答・トルク・diagnostics, ${CTX_ROBOT_STATE_S} 秒間)"
+  fi
+
+  {
+    echo "os: $(lsb_release -ds 2>/dev/null || uname -sr)"
+    echo "cwd: ${PWD/#$HOME/\~}"
+    echo "display: DISPLAY=${DISPLAY:-<unset>} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>} (unset なら画面なし: Gazebo は gui:=false, rviz 不可)"
+    echo "shell: $(ps -o comm= -p "$PPID" 2>/dev/null || echo "${SHELL##*/}")  python3: $(python3 --version 2>&1 | cut -d' ' -f2)"
+    for v in ROS_DISTRO ROS_VERSION ROS_DOMAIN_ID ROS_AUTOMATIC_DISCOVERY_RANGE ROS_LOCALHOST_ONLY RMW_IMPLEMENTATION ROS_MASTER_URI; do
+      printf '%s=%s\n' "$v" "${!v:-<unset>}"
+    done
+    echo "AMENT_PREFIX_PATH (sourced workspaces):"
+    tr ':' '\n' <<< "${AMENT_PREFIX_PATH:-}" | sed -E 's|/install/[^/]+$|/install/…|' | sort -u | sed 's/^/  /' | head -15
+    echo "groups: $(id -nG)"
+    echo "serial devices: $(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | tr '\n' ' ' || true)"
+    if git -C "$PWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "git: $(git -C "$PWD" rev-parse --show-toplevel | sed "s|^$HOME|~|") @ $(git -C "$PWD" rev-parse --abbrev-ref HEAD) ($(git -C "$PWD" status --porcelain | wc -l) changed files)"
+    fi
+  } | section "環境"
+  echo "</ta-context>"
+}
+
+bounded_context() {
+  local out
+  out=$(collect_context | redact)
+  if (( ${#out} > CTX_MAX_BYTES )); then
+    out="${out:0:$CTX_MAX_BYTES}
+…(長すぎるため切り詰めました)
+</ta-context>"
+  fi
+  printf '%s\n' "$out"
+}
+
+# Words that mean "a person or the hardware may be at risk right now". The AI
+# answer takes a minute or more; the first steps must not wait for it.
+readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱く|熱い|異音|異臭|ガリガリ|カチカチ|暴走|止まらない|挟ま|はさま|怪我|けが|ケガ|出血|やけど|火傷|感電|倒れ|落ち'
+
+safety_first() {
+  local text="$*"
+  [[ $text =~ $SAFETY_RE ]] || return 0
+  printf '\e[1;31m%s\e[0m\n' \
+    "[ai-ta] 安全に関わる内容に見えます。AI の回答を待たずに，まず:" \
+    "  1. 動いているプログラムを Ctrl-C で止める" \
+    "  2. 実機ならロボット背面のスイッチでサーボ電源を切る (腕が落ちるので手や物を離す)" \
+    "  3. 煙・焦げ臭さ・発熱があれば触らず，近くの TA / 先生に直接声をかける" \
+    "  4. ta call \"机の番号と状況\" で TA を呼ぶ" >&2
+}
+
+launch_claude() {
+  load_env
+  command -v claude >/dev/null || die "claude が見つかりません。install.sh を実行してください"
+  # Claude Code retries an unreachable server for many minutes without a word,
+  # which a student cannot tell from "thinking". Ask the gateway first.
+  if ! curl -s -o /dev/null -m "${AITA_CONNECT_TIMEOUT:-8}" "$AITA_BASE_URL/health/liveliness"; then
+    die "AI TA サーバー ($AITA_BASE_URL) に接続できません。ネットワーク接続を確認し，'ta doctor' を実行してください。急ぐときは手を挙げて TA を呼んでください"
+  fi
+  # A spent budget otherwise surfaces as a raw "API Error: 422 Budget has been
+  # exceeded!" in English; say what it means and what to do instead.
+  local spent
+  spent=$(curl -s -m 10 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" | python3 -c '
+import json, sys
+try:
+    i = json.load(sys.stdin)["info"]
+except Exception:
+    sys.exit(0)   # cannot tell: let the request itself report
+b = i.get("max_budget")
+if b is not None and (i.get("spend") or 0.0) >= b:
+    print(i.get("budget_reset_at") or "")
+' 2>/dev/null || true)
+  if [[ -n $spent ]]; then
+    die "今日の AI TA の利用枠を使い切りました (次に使えるのは $(date -d "$spent" '+%m/%d %H:%M' 2>/dev/null || echo "$spent") から)。資料を探すか，'ta call \"机番号と内容\"' で TA を呼んでください"
+  fi
+  if [[ ! -f $AITA_CONFIG_DIR/.notice_shown ]]; then
+    info "お知らせ: AI TA への質問と回答は記録され，教員・TA がダッシュボードで確認します（演習の改善と，人の助けが必要な人を見つけるため）。"
+    info "パスワードや個人情報は書かないでください。人を呼びたいときは 'ta call'。"
+    touch "$AITA_CONFIG_DIR/.notice_shown"
+  fi
+  local docs; docs=$(find_docs || true)
+  local args=(--append-system-prompt-file "$AITA_SHARE_DIR/ta-prompt.md")
+  # Extra Claude Code flags, e.g. AITA_CLAUDE_ARGS="-p --continue" for
+  # scripted / non-interactive use (tests, mock students).
+  local extra=()
+  [[ -n ${AITA_CLAUDE_ARGS:-} ]] && read -r -a extra <<< "$AITA_CLAUDE_ARGS"
+  args+=("${extra[@]}")
+  if [[ -n $docs ]]; then
+    args+=(--add-dir "$docs" --append-system-prompt "AITA_DOCS=$docs (演習資料。tips/ に Tips 集)")
+  else
+    info "演習資料 (robot-programming/docs) が見つかりません。AITA_DOCS=<path> で指定できます"
+  fi
+  # Our gateway, our models, nothing else: no personal Anthropic credentials,
+  # and a config dir separate from any personal Claude Code setup.
+  (
+    unset ANTHROPIC_API_KEY CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+    export CLAUDE_CONFIG_DIR="$AITA_CONFIG_DIR/claude" \
+      ANTHROPIC_BASE_URL="$AITA_BASE_URL" \
+      ANTHROPIC_AUTH_TOKEN="$AITA_KEY" \
+      ANTHROPIC_MODEL="$AITA_MODEL" \
+      ANTHROPIC_DEFAULT_OPUS_MODEL="$AITA_MODEL" \
+      ANTHROPIC_DEFAULT_SONNET_MODEL="$AITA_MODEL" \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL="$AITA_FAST_MODEL" \
+      CLAUDE_CODE_SUBAGENT_MODEL="$AITA_MODEL" \
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+      DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1
+    run_claude "${args[@]}" "$@"
+  )
+}
+
+# In print mode (-p) the answer only ever exists on the terminal, so keep a
+# copy: `cat ~/.cache/ai-ta/last_answer.md` after a `clear`. Interactive
+# sessions must keep the TTY (no pipe) and have their own history (/resume).
+run_claude() {
+  local a
+  for a in "$@"; do
+    if [[ $a == -p || $a == --print ]]; then
+      mkdir -p "$AITA_CACHE_DIR"
+      # Claude Code warns on every call that it does not know "ta-main" (a
+      # gateway alias); no setting turns that off, so drop those two lines.
+      claude "$@" 2> >(grep -vE "doesn't recognize the model|unrecognized_model" >&2) \
+        | tee "$AITA_CACHE_DIR/last_answer.md"
+      return "${PIPESTATUS[0]}"
+    fi
+  done
+  claude "$@"
+}
+
+cmd_call() {
+  load_env
+  [[ -n ${AITA_HELP_URL:-} ]] || die "キーファイルに AITA_HELP_URL がありません。新しく配布されたキーで ta setup してください"
+  local msg=${*:-}
+  if [[ -z $msg ]]; then
+    read -r -p "どんなことで困っていますか？（机の番号・場所もあれば）: " msg
+  fi
+  local ctx; ctx=$(bounded_context)
+  local body
+  body=$(AITA_MSG=$msg AITA_CTX=$ctx python3 -c 'import json, os; print(json.dumps({"message": os.environ["AITA_MSG"], "context": os.environ["AITA_CTX"]}, ensure_ascii=False))')
+  local resp code
+  resp=$(curl -sS -m 15 -w '\n%{http_code}' -X POST "$AITA_HELP_URL/api/call" \
+    -H "Authorization: Bearer $AITA_KEY" -H 'Content-Type: application/json' --data-binary "$body") \
+    || die "呼び出しを送れませんでした (サーバーに接続できません)。手を挙げて TA を呼んでください"
+  code=${resp##*$'\n'}; resp=${resp%$'\n'*}
+  if [[ $code == 429 ]]; then
+    info "$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("detail", ""))' <<< "$resp")"
+    return 0
+  fi
+  [[ $code == 200 ]] || die "呼び出しに失敗しました (HTTP $code)。手を挙げて TA を呼んでください"
+  local ahead
+  ahead=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("ahead", "?"))' <<< "$resp")
+  info "TA・先生に通知しました（エラー情報も添付）。あなたより前に ${ahead} 件待っています。"
+}
+
+cmd_fix() {
+  local note=${*:-直前のエラーを解決したい。}
+  safety_first "$note"
+  local ctx; ctx=$(bounded_context)
+  mkdir -p "$AITA_CACHE_DIR"
+  printf '%s\n' "$ctx" > "$AITA_CACHE_DIR/last_context.md"
+  info "エラー情報を収集しました (${#ctx} 文字, 内容: ta context / $AITA_CACHE_DIR/last_context.md)"
+  launch_claude "$note
+
+$ctx"
+}
+
+# Before the real robot: the AI goes through the checklist in the docs and
+# points at lines; it does not pass or fail anything (a human TA does) and
+# does not edit the file, so the student has to make and explain the changes.
+cmd_review() {
+  [[ $# -ge 1 ]] || die "使い方: ta review <ファイル.py>"
+  local file; file=$(realpath -e "$1" 2>/dev/null) || die "ファイルがありません: $1"
+  launch_claude "ta review: 実機で動かす前のチェックをお願いします。対象: $file
+
+資料 jedy-demos-2026.md の「実機に出す前のチェック」の各項目について，このファイルの該当行（file:line）と，問題があればその理由・直し方の方針を書いてください。
+- ファイルは書き換えないでください（直すのは学生）。
+- 「実機に出してよい」という判定はしないでください。判定は人の TA が，学生の説明を聞いてから行います。
+- 最後に，人の TA に説明するときに学生が答えられるべき質問を 2〜3 個挙げてください。"
+}
+
+cmd_run() {
+  (( $# )) || die "使い方: ta run <command ...>"
+  command -v script >/dev/null || die "script (util-linux) が必要です"
+  local dir=$AITA_CACHE_DIR/runs ts log cmd ec
+  mkdir -p "$dir"
+  ts=$(date +%Y%m%d-%H%M%S)
+  log=$dir/$ts.log
+  cmd=$(printf '%q ' "$@")
+  info "記録中: $log"
+  set +e
+  script -q -e -f -c "$cmd" "$log"
+  ec=$?
+  set -e
+  printf 'command: %s\ncwd: %s\nexit: %s\nstarted: %s\n' "$cmd" "$PWD" "$ec" "$ts" > "$dir/$ts.meta"
+  ln -sfn "$ts.log" "$dir/latest.log"
+  ln -sfn "$ts.meta" "$dir/latest.meta"
+  # Keep the newest 50 runs.
+  ls -t "$dir"/*.log 2>/dev/null | tail -n +51 | while read -r old; do rm -f "$old" "${old%.log}.meta"; done
+  if (( ec != 0 )); then
+    printf '%s\t%s\t%s\t%s\n' "$ec" "$(date +%s)" "$PWD" "$cmd" > "$AITA_CACHE_DIR/last_failed"
+    info "exit $ec — 'ta fix' で AI TA に相談できます"
+  fi
+  return "$ec"
+}
+
+cmd_usage() {
+  load_env
+  curl -fsS -m 15 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" \
+    | python3 -c '
+import json, sys
+i = json.load(sys.stdin)["info"]
+spend = i.get("spend") or 0.0
+budget = i.get("max_budget")
+period = i.get("budget_duration") or ""
+reset = i.get("budget_reset_at") or "-"
+expires = i.get("expires") or "なし"
+line = f"使用額: ${spend:.4f}"
+if budget is not None:
+    line += f" / 上限 ${budget:.2f} ({period}ごとにリセット, 次回 {reset})"
+print(line)
+print(f"キー有効期限: {expires}")
+'
+}
+
+cmd_doctor() {
+  local ok=0 docs
+  if [[ -f $AITA_ENV_FILE ]]; then load_env; echo "✓ キー設定: $AITA_ENV_FILE"; else echo "✗ キー未設定 (ta setup <file>)"; ok=1; fi
+  if command -v claude >/dev/null; then echo "✓ claude: $(claude --version 2>/dev/null)"; else echo "✗ claude 未インストール"; ok=1; fi
+  if [[ -n ${AITA_KEY:-} ]]; then
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$AITA_BASE_URL/v1/models" -H "Authorization: Bearer $AITA_KEY" || true)
+    case $code in
+      200) echo "✓ サーバー: $AITA_BASE_URL (認証 OK)" ;;
+      401|403) echo "✗ サーバー: $AITA_BASE_URL キーが無効 (HTTP $code)"; ok=1 ;;
+      000) echo "✗ サーバー: $AITA_BASE_URL に接続できません (ネットワーク接続?)"; ok=1 ;;
+      *) echo "✗ サーバー: $AITA_BASE_URL HTTP $code"; ok=1 ;;
+    esac
+  fi
+  if docs=$(find_docs); then echo "✓ 演習資料: $docs"; else echo "✗ 演習資料が見つかりません (AITA_DOCS=<.../robot-programming/docs>)"; ok=1; fi
+  if declare -F __aita_prompt >/dev/null 2>&1 || grep -q 'ai-ta/ta-hook.bash' "$HOME/.bashrc" 2>/dev/null; then
+    echo "✓ bash フック (失敗コマンドの記録) 有効"
+  else
+    echo "- bash フック未設定 (install.sh で設定されます)"
+  fi
+  return $ok
+}
+
+cmd_login() {
+  # GitHub OAuth device flow for the course's OAuth App, then the server swaps
+  # the GitHub token for this student's key (roster: student_id <-> GitHub).
+  local server=${1:-}
+  if [[ -z $server && -f $AITA_ENV_FILE ]]; then
+    server=$(sed -n 's/^AITA_BASE_URL=//p' "$AITA_ENV_FILE" | head -1)
+  fi
+  server=${server:-$AITA_DEFAULT_SERVER}
+  mkdir -p "$AITA_CONFIG_DIR"; chmod 700 "$AITA_CONFIG_DIR"
+  python3 - "$server" "$AITA_ENV_FILE" <<'PY' || exit 1
+import json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+
+server, env_file = sys.argv[1].rstrip("/"), sys.argv[2]
+
+
+def request(url, data=None, form=False):
+    """POST (JSON or form) or GET; return (status, parsed JSON body)."""
+    headers = {"Accept": "application/json"}
+    body = None
+    if data is not None:
+        if form:
+            body = urllib.parse.urlencode(data).encode()
+        else:
+            body = json.dumps(data).encode()
+            headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.load(e)
+        except ValueError:
+            return e.code, {}
+    except (urllib.error.URLError, OSError) as e:
+        sys.exit(f"ta: {url} に接続できません ({e})。ネットワーク接続を確認してください")
+
+
+def fail(status, body):
+    detail = body.get("detail") if isinstance(body, dict) else None
+    sys.exit(f"ta: {detail or 'エラー'} (HTTP {status})")
+
+
+status, conf = request(f"{server}/api/login/config")
+if status != 200:
+    fail(status, conf)
+client_id = conf["github_client_id"]
+status, dev = request("https://github.com/login/device/code", {"client_id": client_id}, form=True)
+if status != 200 or "device_code" not in dev:
+    sys.exit(f"ta: GitHub のログインを始められません (HTTP {status} {dev.get('error', '')})")
+print(f"\n  1. ブラウザで {dev['verification_uri']} を開く", file=sys.stderr)
+print(f"  2. コード  \033[1m{dev['user_code']}\033[0m  を入力して，演習の AI TA を承認する\n", file=sys.stderr)
+try:
+    subprocess.Popen(["xdg-open", dev["verification_uri"]],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+except OSError:
+    pass
+interval = int(dev.get("interval", 5))
+deadline = time.time() + int(dev.get("expires_in", 900))
+token = None
+print("  承認を待っています (Ctrl-C で中止)...", file=sys.stderr)
+while time.time() < deadline:
+    time.sleep(interval)
+    status, res = request("https://github.com/login/oauth/access_token", {
+        "client_id": client_id, "device_code": dev["device_code"],
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}, form=True)
+    err = res.get("error")
+    if "access_token" in res:
+        token = res["access_token"]
+        break
+    if err == "authorization_pending":
+        continue
+    if err == "slow_down":
+        interval = int(res.get("interval", interval + 5))
+        continue
+    if err == "access_denied":
+        sys.exit("ta: GitHub で承認がキャンセルされました")
+    sys.exit(f"ta: GitHub のログインに失敗しました ({err or status})")
+if token is None:
+    sys.exit("ta: 承認の待ち時間が切れました。もう一度 ta login してください")
+status, res = request(f"{server}/api/login", {"github_token": token})
+if status != 200:
+    fail(status, res)
+old = os.umask(0o077)
+tmp = env_file + ".tmp"
+with open(tmp, "w") as f:
+    f.write(res["env"])
+os.replace(tmp, env_file)
+os.umask(old)
+what = "発行し直しました (前のキーは無効になりました)" if res.get("replaced_old_key") else "発行しました"
+print(f"\033[36m[ai-ta]\033[0m {res['student_id']} {res['name']} (GitHub: {res['github']}) のキーを{what}: {env_file}",
+      file=sys.stderr)
+PY
+  cmd_doctor || true
+}
+
+cmd_setup() {
+  local src=${1:?使い方: ta setup <配布されたキーファイル>}
+  [[ -f $src ]] || die "$src がありません"
+  grep -q '^AITA_KEY=' "$src" && grep -q '^AITA_BASE_URL=' "$src" || die "$src はキーファイルではないようです"
+  mkdir -p "$AITA_CONFIG_DIR"; chmod 700 "$AITA_CONFIG_DIR"
+  install -m 600 "$src" "$AITA_ENV_FILE"
+  info "設定しました: $AITA_ENV_FILE"
+  cmd_doctor || true
+}
+
+case ${1:-} in
+  fix)      shift; cmd_fix "$@" ;;
+  call)     shift; cmd_call "$@" ;;
+  run)      shift; cmd_run "$@" ;;
+  review)   shift; cmd_review "$@" ;;
+  context)  bounded_context ;;
+  usage)    cmd_usage ;;
+  doctor)   cmd_doctor ;;
+  setup)    shift; cmd_setup "$@" ;;
+  login)    shift; cmd_login "$@" ;;
+  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)        safety_first "$@"; launch_claude "$@" ;;
+esac
