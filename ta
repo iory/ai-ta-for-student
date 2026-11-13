@@ -480,7 +480,33 @@ while time.time() < deadline:
     sys.exit(f"ta: GitHub のログインに失敗しました ({err or status})")
 if token is None:
     sys.exit("ta: 承認の待ち時間が切れました。もう一度 ta login してください")
-status, res = request(f"{server}/api/login", {"github_token": token})
+def ask_consent(text):
+    """Show a consent text and ask y/n on the terminal (stdin is this heredoc).
+
+    No terminal, an empty line or "n" = no.
+    """
+    print("\n" + "-" * 60 + "\n" + text + "\n" + "-" * 60, file=sys.stderr)
+    try:
+        # Separate read / write handles: "r+" on a tty fails (not seekable).
+        with open("/dev/tty") as tty_in, open("/dev/tty", "w") as tty_out:
+            while True:
+                tty_out.write("同意しますか? [y/n]: ")
+                tty_out.flush()
+                reply = tty_in.readline().strip().lower()
+                if reply in ("y", "yes", "n", "no", ""):
+                    return reply in ("y", "yes")
+    except OSError:
+        print("ta: 端末が無いので「同意しない」として続けます", file=sys.stderr)
+        return False
+
+
+answers = {}
+for consent in conf.get("consents") or []:
+    agree = ask_consent(consent["text"])
+    answers[consent["kind"]] = {"version": consent["version"], "agree": agree}
+    if consent.get("required") and not agree:
+        break  # the server records the "no" and issues no key
+status, res = request(f"{server}/api/login", {"github_token": token, "consents": answers})
 if status != 200:
     fail(status, res)
 old = os.umask(0o077)
@@ -492,6 +518,9 @@ os.umask(old)
 what = "発行し直しました (前のキーは無効になりました)" if res.get("replaced_old_key") else "発行しました"
 print(f"\033[36m[ai-ta]\033[0m {res['student_id']} {res['name']} (GitHub: {res['github']}) のキーを{what}: {env_file}",
       file=sys.stderr)
+if res.get("vlm_asked"):
+    state = "使えます" if res.get("vlm") else "使えません (同意しなかったため)"
+    print(f"\033[36m[ai-ta]\033[0m カメラ画像を AI に送る機能 (vlm-gemini / vlm-er) は{state}", file=sys.stderr)
 PY
   cmd_doctor || true
 }
