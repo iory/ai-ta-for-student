@@ -88,6 +88,15 @@ def main():
     while time.monotonic() < end:
         rclpy.spin_once(node, timeout_sec=0.1)
 
+    # Gazebo publishes /clock; the real robot's bring-up does not. In the
+    # simulator there is no board, so do not report one as stopped.
+    if node.count_publishers('/clock') > 0 and BOARD_DIAG_NAME not in got['diag']:
+        print('simulation: Gazebo is running (/clock is published); there is no real-robot '
+              'board or servo switch, so board and servo state do not apply')
+        node.destroy_node()
+        rclpy.shutdown()
+        return 0
+
     link = got['diag'].get(BOARD_DIAG_NAME)
     board_ok = link is not None and _level(link.level) < _level(DiagnosticStatus.ERROR)
     if link is None:

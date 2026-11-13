@@ -219,7 +219,9 @@ if b is not None and (i.get("spend") or 0.0) >= b:
     touch "$AITA_CONFIG_DIR/.notice_shown"
   fi
   local docs; docs=$(find_docs || true)
-  local args=(--append-system-prompt-file "$AITA_SHARE_DIR/ta-prompt.md")
+  # Claude Code's built-in skills (code review, API reference, ...) only cost
+  # time and money here: the TA answers from the course docs.
+  local args=(--append-system-prompt-file "$AITA_SHARE_DIR/ta-prompt.md" --disallowed-tools Skill)
   # Extra Claude Code flags, e.g. AITA_CLAUDE_ARGS="-p --continue" for
   # scripted / non-interactive use (tests, mock students).
   local extra=()
@@ -314,6 +316,7 @@ cmd_review() {
 
 資料 robot-programming-2-2026.md の「実機に出す前のチェック」の各項目について，このファイルの該当行（file:line）と，問題があればその理由・直し方の方針を書いてください。
 - ファイルは書き換えないでください（直すのは学生）。
+- チェック項目に反するもの（直してから実機へ）と，チェック項目に無い改善案（任意）を分けて書いてください。資料の「プログラムの形」やコード例と同じ書き方は指摘しないでください。
 - コードから分かる項目に問題がなければ，そう書いてください。
 - コードから分からない項目（周りに人や机が無いか，止まらないときに電源を切れる人がそばにいるか）は，学生に確かめるよう書いてください。"
 }

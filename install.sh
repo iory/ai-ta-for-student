@@ -115,7 +115,12 @@ mkdir -p "$SHARE/pyhook"
 install -m 644 "$HERE/aita_pyhook.py" "$HERE/sitecustomize.py" "$SHARE/pyhook/"
 echo "Python 例外の記録フックを入れました: $PY_SITE/aita-pyhook.pth, $SHARE/pyhook"
 
-case :$PATH: in *:"$BIN":*) ;; *) echo "注意: $BIN を PATH に追加してください (export PATH=\$HOME/.local/bin:\$PATH)";; esac
+# Ubuntu's ~/.profile adds ~/.local/bin only if it existed at login, so on a
+# fresh account `ta` is not found until the next login. Add it in ~/.bashrc.
+if ! grep -qF 'ai-ta: ~/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+  printf '%s\n' 'case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin' >> "$HOME/.bashrc"
+  echo "added ~/.local/bin to PATH in ~/.bashrc"
+fi
 
 if ! command -v claude >/dev/null && [[ ! -x $BIN/claude ]]; then
   echo "Claude Code をインストールします (公式インストーラ)"
