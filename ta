@@ -51,7 +51,9 @@ find_docs() {
            "$HOME/ros2_ws/src/robot-programming/docs" \
            "$HOME/catkin_ws/src/robot-programming/docs" \
            "$HOME/robot-programming/docs"; do
-    [[ -n $d && -f $d/index.md ]] && { printf '%s\n' "$d"; return 0; }
+    # Claude Code checks --add-dir against the real path: a symlinked
+    # ~/ros2_ws left every Read of the docs refused.
+    [[ -n $d && -f $d/index.md ]] && { realpath "$d"; return 0; }
   done
   return 1
 }
@@ -356,6 +358,11 @@ spend = i.get("spend") or 0.0
 budget = i.get("max_budget")
 period = i.get("budget_duration") or ""
 reset = i.get("budget_reset_at") or "-"
+try:
+    from datetime import datetime
+    reset = datetime.fromisoformat(reset).astimezone().strftime("%m/%d %H:%M")
+except ValueError:
+    pass
 expires = i.get("expires") or "なし"
 line = f"使用額: ${spend:.4f}"
 if budget is not None:
