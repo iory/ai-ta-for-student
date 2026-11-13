@@ -12,6 +12,7 @@
 #   ta doctor             サーバー接続・キー・資料の場所を確認
 #   ta login              GitHub でログインして自分のキーを設定 (再実行で発行し直し)
 #   ta setup <keyfile>    配布されたキーファイルを設定
+#   ta version            入っている版 (更新はインストールのコマンドをもう一度)
 set -euo pipefail
 
 readonly PROG=ta
@@ -360,9 +361,14 @@ print(f"キー有効期限: {expires}")
 '
 }
 
+ta_version() {
+  cat "$AITA_SHARE_DIR/VERSION" 2>/dev/null || echo unknown
+}
+
 cmd_doctor() {
   local ok=0 docs
-  if [[ -f $AITA_ENV_FILE ]]; then load_env; echo "✓ キー設定: $AITA_ENV_FILE"; else echo "✗ キー未設定 (ta setup <file>)"; ok=1; fi
+  echo "  ai-ta-for-student $(ta_version)"
+  if [[ -f $AITA_ENV_FILE ]]; then load_env; echo "✓ キー設定: $AITA_ENV_FILE"; else echo "✗ キー未設定 (ta login，配られたキーファイルなら ta setup <file>)"; ok=1; fi
   if command -v claude >/dev/null; then echo "✓ claude: $(claude --version 2>/dev/null)"; else echo "✗ claude 未インストール"; ok=1; fi
   if [[ -n ${AITA_KEY:-} ]]; then
     local code
@@ -499,6 +505,7 @@ case ${1:-} in
   doctor)   cmd_doctor ;;
   setup)    shift; cmd_setup "$@" ;;
   login)    shift; cmd_login "$@" ;;
-  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  version|--version|-V) echo "ai-ta-for-student $(ta_version)" ;;
+  -h|--help|help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)        safety_first "$@"; launch_claude "$@" ;;
 esac

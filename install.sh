@@ -4,14 +4,21 @@
 #   curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install.sh | bash
 #   ./install.sh                 # from a clone: install ta, hook, Claude Code
 #   ./install.sh <keyfile>       # ... and set a distributed key file
+#   curl ... | AITA_VERSION=v0.1.0 bash   # a released version instead of main
 set -euo pipefail
 
 # The files to install sit next to this script in a clone. Piped from curl
 # there is no such directory: fetch the repository's tarball into a
-# temporary one (AITA_CLIENT_TARBALL to use another).
+# temporary one: main, or the tag AITA_VERSION (e.g. v0.1.0), or
+# AITA_CLIENT_TARBALL to use another.
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)
 if [[ -z $HERE || ! -f $HERE/ta || ! -f $HERE/ta-prompt.md ]]; then
-  TARBALL=${AITA_CLIENT_TARBALL:-https://github.com/iory/ai-ta-for-student/archive/refs/heads/main.tar.gz}
+  REPO=https://github.com/iory/ai-ta-for-student
+  if [[ -n ${AITA_VERSION:-} ]]; then
+    TARBALL=${AITA_CLIENT_TARBALL:-$REPO/archive/refs/tags/$AITA_VERSION.tar.gz}
+  else
+    TARBALL=${AITA_CLIENT_TARBALL:-$REPO/archive/refs/heads/main.tar.gz}
+  fi
   HERE=$(mktemp -d)
   trap 'rm -rf "$HERE"' EXIT
   echo "ダウンロード: $TARBALL"
@@ -26,7 +33,7 @@ HOOK_LINE='[ -f ~/.local/share/ai-ta/ta-hook.bash ] && . ~/.local/share/ai-ta/ta
 mkdir -p "$BIN" "$SHARE" "$CONF/claude"
 chmod 700 "$CONF"
 install -m 755 "$HERE/ta" "$BIN/ta"
-install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/aita_robot_state.py" "$SHARE/"
+install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/aita_robot_state.py" "$HERE/VERSION" "$SHARE/"
 
 # Claude Code settings for the TA profile only (separate CLAUDE_CONFIG_DIR).
 # defaultMode "default": every command / edit asks the student first. Auto
@@ -120,4 +127,5 @@ if [[ $# -ge 1 ]]; then
 else
   echo "次に: ta login (GitHub でログインして自分のキーを設定。配られたキーファイルなら ta setup <keyfile>)"
 fi
+echo "ai-ta-for-student $(cat "$SHARE/VERSION") を入れました"
 echo "完了。新しいターミナルを開くか 'source ~/.bashrc' してから 'ta doctor' で確認してください。"

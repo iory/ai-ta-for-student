@@ -26,6 +26,16 @@ ta doctor             # 接続・キー・資料の場所を確認する (全部
 - 初めて起動したフォルダでは「このフォルダを信頼するか」と聞かれるので **Yes, I trust this folder** を選ぶ．
 - 演習資料が見つからないと言われたら `AITA_DOCS=<.../robot-programming/docs>` で場所を指定する．
 
+## 版と更新
+
+- `ta version` で入っている版を確かめられる (`ta doctor` の 1 行目にも出る)．変更点は [CHANGELOG.md](CHANGELOG.md)．
+- 新しい版にするには，インストールのコマンドをもう一度実行する (キーと設定はそのまま残る)．
+- 決まった版を入れるときは版を指定する (版の一覧は [Releases](https://github.com/iory/ai-ta-for-student/releases) / タグ)．
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install.sh | AITA_VERSION=v0.1.0 bash
+```
+
 ## 使い方
 
 | コマンド | すること |
@@ -38,6 +48,7 @@ ta doctor             # 接続・キー・資料の場所を確認する (全部
 | `ta context` | `ta fix` が送る内容を表示するだけ (何も送らない) |
 | `ta usage` | 今日の利用額と上限 |
 | `ta setup <キーファイル>` | 配られたキーファイルで設定する (`ta login` を使わない場合) |
+| `ta version` | 入っている版 |
 
 - コマンドが失敗すると `[ai-ta] exit N — "ta fix" で…` という 1 行が出る．`AITA_QUIET=1` で消せる．
 - AI TA がコマンドを実行したりファイルを書き換えたりするときは，毎回確認を求める．ロボットを動かすコマンドを AI が勝手に実行することはない．
