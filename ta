@@ -41,6 +41,9 @@ readonly AITA_MAX_CONTEXT_TOKENS=${AITA_MAX_CONTEXT_TOKENS:-200000}
 readonly CTX_RUN_LINES=${AITA_CTX_RUN_LINES:-200}
 readonly CTX_PANE_LINES=${AITA_CTX_PANE_LINES:-150}
 readonly CTX_OTHER_PANE_LINES=${AITA_CTX_OTHER_PANE_LINES:-60}
+# All tmux/byobu panes together (characters, like CTX_MAX_BYTES): panes past
+# it are only listed, so the ROS log and environment after them still fit.
+readonly CTX_PANES_MAX_BYTES=${AITA_CTX_PANES_MAX_BYTES:-30000}
 readonly CTX_ROSLOG_LINES=${AITA_CTX_ROSLOG_LINES:-80}
 readonly CTX_PYERR_LINES=${AITA_CTX_PYERR_LINES:-80}
 readonly CTX_MAX_AGE_MIN=${AITA_CTX_MAX_AGE_MIN:-30}
@@ -102,6 +105,55 @@ running_robot_procs() {
   done < <(ps -u "$(id -u)" -o pid=,etimes=,args= | grep -E 'ros2 launch|gz sim' | grep -vE 'grep|ruby ' || true)
 }
 
+# Lines that mark a pane worth reading first.
+readonly PANE_ERROR_RE='Traceback|Error|\[ERROR\]'
+
+# Every pane of every window of this tmux / byobu session: students run ipython
+# or their program in one window and type `ta fix` in another, so the
+# traceback is rarely in ta's own window. ta's own pane ($TMUX_PANE, set by
+# tmux / byobu-tmux in every pane; not the session's current window, which
+# another client may be looking at) gets CTX_PANE_LINES, the others
+# CTX_OTHER_PANE_LINES. Panes showing an error come first; panes past
+# CTX_PANES_MAX_BYTES are only named.
+collect_panes() {
+  local cur pid widx pidx pcmd wname n text label used=0
+  local -a first=() rest=() skipped=()
+  local -A texts=() labels=()
+  cur=${TMUX_PANE:-$(tmux display-message -p '#{pane_id}')}
+  while IFS=$'\t' read -r pid widx pidx pcmd wname; do
+    if [[ $pid == "$cur" ]]; then n=$CTX_PANE_LINES; else n=$CTX_OTHER_PANE_LINES; fi
+    text=$(tmux capture-pane -p -J -t "$pid" -S "-$n" 2>/dev/null \
+      | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' || true)
+    [[ -n $text ]] || continue
+    label="tmux/byobu 画面 window $widx ($wname) pane $pidx [$pcmd]"
+    [[ $pid == "$cur" ]] && label+=" ← ta を実行した画面"
+    texts[$pid]=$text
+    # An AI TA session (claude) quotes errors in its answers: not a new error.
+    if [[ $pcmd != claude ]] && grep -qE "$PANE_ERROR_RE" <<< "$text"; then
+      label+=" ← エラーらしき行あり"
+      if [[ $pid == "$cur" ]]; then first=("$pid" "${first[@]}"); else first+=("$pid"); fi
+    elif [[ $pid == "$cur" ]]; then
+      rest=("$pid" "${rest[@]}")
+    else
+      rest+=("$pid")
+    fi
+    labels[$pid]=$label
+  done < <(tmux list-panes -s -t "$cur" \
+             -F $'#{pane_id}\t#{window_index}\t#{pane_index}\t#{pane_current_command}\t#{window_name}')
+  for pid in "${first[@]}" "${rest[@]}"; do
+    # ta's own pane always goes in; it is at most CTX_PANE_LINES lines.
+    if [[ $pid != "$cur" ]] && (( used + ${#texts[$pid]} > CTX_PANES_MAX_BYTES )); then
+      skipped+=("${labels[$pid]}")
+      continue
+    fi
+    used=$(( used + ${#texts[$pid]} ))
+    section "${labels[$pid]}" <<< "${texts[$pid]}"
+  done
+  if (( ${#skipped[@]} )); then
+    printf '%s\n' "${skipped[@]}" | section "長すぎるため省いた tmux/byobu 画面"
+  fi
+}
+
 collect_context() {
   local f ec ts cwd cmd
   echo "<ta-context>"
@@ -122,17 +174,7 @@ collect_context() {
   fi
 
   if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then
-    # The pane `ta` runs in is $TMUX_PANE (set by tmux / byobu-tmux in every
-    # pane). Without -t, list-panes took the session's *current* window, which
-    # is not this one when the session is detached or another client looks at
-    # another window: the traceback in this window was missed.
-    local cur pid pcmd n
-    cur=${TMUX_PANE:-$(tmux display-message -p '#{pane_id}')}
-    while IFS=$'\t' read -r pid pcmd; do
-      if [[ $pid == "$cur" ]]; then n=$CTX_PANE_LINES; else n=$CTX_OTHER_PANE_LINES; fi
-      tmux capture-pane -p -J -t "$pid" -S "-$n" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
-        | section "tmux/byobu 画面 $pid ($pcmd)$([[ $pid == "$cur" ]] && echo ' ← ta を実行した画面')"
-    done < <(tmux list-panes -t "$cur" -F $'#{pane_id}\t#{pane_current_command}')
+    collect_panes
   fi
 
   local roslog
@@ -301,6 +343,7 @@ if b is not None and (i.get("spend") or 0.0) >= b:
       ANTHROPIC_DEFAULT_HAIKU_MODEL="$AITA_FAST_MODEL" \
       CLAUDE_CODE_SUBAGENT_MODEL="$AITA_MODEL" \
       CLAUDE_CODE_MAX_CONTEXT_TOKENS="$AITA_MAX_CONTEXT_TOKENS" \
+      CLAUDE_CODE_RESUME_HINT_COMMAND="$PROG" \
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
       DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1
     run_claude "${args[@]}" "$@"
@@ -326,10 +369,24 @@ run_claude() {
   done
   local ec=0
   claude "$@" || ec=$?
-  # On exit Claude Code prints "claude --resume <id>". Run as plain `claude`,
-  # that starts outside the AI TA (no course gateway, no TA prompt or settings).
-  info "続きから再開するときは 'claude --resume …' ではなく 'ta --continue' (直前の会話) か 'ta --resume' (一覧から選ぶ，ID も付けられる) を使ってください"
+  # On exit Claude Code prints "<cmd> --resume <id>". With
+  # CLAUDE_CODE_RESUME_HINT_COMMAND=ta (launch_claude; Claude Code 2.1.323+,
+  # https://code.claude.com/docs/en/env-vars) that line already says
+  # "ta --resume <id>", and a second, different hint here only confused
+  # students. Older Claude Code says "claude --resume <id>", which starts
+  # outside the AI TA (no course gateway, no TA prompt or settings): point at it.
+  if ! claude_names_ta_in_resume_hint; then
+    info "↑ の 'claude --resume …' ではなく 'ta --continue' (直前の会話) または 'ta --resume' (一覧から選ぶ，↑ の ID も付けられる) で再開してください"
+  fi
   return "$ec"
+}
+
+# Whether this Claude Code honours CLAUDE_CODE_RESUME_HINT_COMMAND (2.1.323+).
+claude_names_ta_in_resume_hint() {
+  local v
+  v=$(claude --version 2>/dev/null | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)
+  [[ -n $v ]] || return 1
+  [[ $(printf '%s\n' 2.1.323 "$v" | sort -V | head -1) == 2.1.323 ]]
 }
 
 cmd_call() {
@@ -382,6 +439,7 @@ cmd_review() {
 - ファイルは書き換えないでください（直すのは学生）。
 - 該当行は $(basename "$file"):42 のようにそのまま書き，Markdown のリンクにしないでください。
 - チェック項目に反するもの（直してから実機へ）と，チェック項目に無い改善案（任意）を分けて書いてください。資料の「プログラムの形」やコード例と同じ書き方は指摘しないでください。
+- 距離画像・物の位置 (ri.depth_image / ri.detection_position / ri.pixel_position) を使っていれば，資料「実機とシミュレータの違い」の D405 の測れる範囲 (遠いと nan / None) に頼っていないかも確かめてください。
 - コードから分かる項目に問題がなければ，そう書いてください。
 - コードから分からない項目（周りに人や机が無いか，止まらないときに電源を切れる人がそばにいるか）は，学生に確かめるよう書いてください。"
 }
