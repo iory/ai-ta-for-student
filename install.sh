@@ -123,8 +123,15 @@ if ! grep -qF 'ai-ta: ~/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
 fi
 
 if ! command -v claude >/dev/null && [[ ! -x $BIN/claude ]]; then
-  echo "Claude Code をインストールします (公式インストーラ)"
+  echo "Claude Code をダウンロードしています (1〜2 分)"
   curl -fsSL https://claude.ai/install.sh | bash
+  # The official installer ends with "~/.local/bin is not in your PATH. Run:
+  # echo 'export PATH=...' >> ~/.bashrc" when this shell's PATH lacks it. The
+  # ~/.bashrc line above already does that (for new terminals and after
+  # `source ~/.bashrc`); adding it again only duplicates it.
+  if [[ :$PATH: != *:"$BIN":* ]] && grep -qF 'ai-ta: ~/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+    echo "↑ \"~/.local/bin is not in your PATH\" と echo 'export PATH=...' の案内は無視してください (ai-ta が ~/.bashrc に追加済み)"
+  fi
 fi
 
 if [[ $# -ge 1 ]]; then

@@ -3,12 +3,13 @@
 #
 #   ta                    AI TA と対話を始める
 #   ta "質問"             質問を付けて始める
+#   ta --continue         直前の会話の続きから (ta --resume で一覧から選ぶ)
 #   ta fix [メモ]         直前のエラー情報 (コマンド/出力/画面/ROSログ/環境) を集めて相談
 #   ta run <cmd ...>      出力を記録しながらコマンドを実行 (失敗したら ta fix で相談)
 #   ta call [メモ]        人間の TA・先生を呼ぶ (エラー情報を添付してダッシュボードに通知)
 #   ta review <file.py>   実機に出す前のチェック項目に照らしてコードを見てもらう
 #   ta context            ta fix が送る情報を表示だけする (送信しない)
-#   ta usage              今日の利用額と上限
+#   ta usage              今日の利用額と上限，カメラ画像 AI の同意
 #   ta doctor             サーバー接続・キー・資料の場所を確認
 #   ta login              GitHub でログインして自分のキーを設定 (再実行で発行し直し)
 #   ta setup <keyfile>    配布されたキーファイルを設定
@@ -24,6 +25,17 @@ readonly AITA_ENV_FILE=$AITA_CONFIG_DIR/env
 readonly AITA_DEFAULT_SERVER=${AITA_DEFAULT_SERVER:-https://jsk-aita.japaneast.cloudapp.azure.com}
 readonly AITA_MODEL=${AITA_MODEL:-ta-main}
 readonly AITA_FAST_MODEL=${AITA_FAST_MODEL:-ta-fast}
+# The context window Claude Code works within for ta-main (it compacts the
+# conversation there). Claude Code does not know the gateway alias "ta-main":
+# it warns 'Model "ta-main" isn't recognized · context assumed to be 1m tokens'
+# at every start (2.1.323). CLAUDE_CODE_MAX_CONTEXT_TOKENS is its documented
+# setting for a gateway model's window, and with it the warning is gone
+# (https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id).
+# 200k, not the model's 922k input limit: GPT-6.1 Terra prices a whole request
+# with more than 272K input tokens at 2x input / 1.5x output
+# (https://developers.openai.com/api/docs/models/gpt-6.1-terra), so sessions
+# compact before they get there.
+readonly AITA_MAX_CONTEXT_TOKENS=${AITA_MAX_CONTEXT_TOKENS:-200000}
 # How much of each source goes into `ta fix` (lines).
 readonly CTX_RUN_LINES=${AITA_CTX_RUN_LINES:-200}
 readonly CTX_PANE_LINES=${AITA_CTX_PANE_LINES:-150}
@@ -109,13 +121,17 @@ collect_context() {
   fi
 
   if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then
+    # The pane `ta` runs in is $TMUX_PANE (set by tmux / byobu-tmux in every
+    # pane). Without -t, list-panes took the session's *current* window, which
+    # is not this one when the session is detached or another client looks at
+    # another window: the traceback in this window was missed.
     local cur pid pcmd n
     cur=${TMUX_PANE:-$(tmux display-message -p '#{pane_id}')}
     while IFS=$'\t' read -r pid pcmd; do
       if [[ $pid == "$cur" ]]; then n=$CTX_PANE_LINES; else n=$CTX_OTHER_PANE_LINES; fi
       tmux capture-pane -p -J -t "$pid" -S "-$n" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
         | section "tmux/byobu 画面 $pid ($pcmd)$([[ $pid == "$cur" ]] && echo ' ← ta を実行した画面')"
-    done < <(tmux list-panes -F $'#{pane_id}\t#{pane_current_command}')
+    done < <(tmux list-panes -t "$cur" -F $'#{pane_id}\t#{pane_current_command}')
   fi
 
   local roslog
@@ -165,9 +181,40 @@ collect_context() {
   echo "</ta-context>"
 }
 
+# A key exported in the shell (e.g. `export AITA_KEY=...` in ~/.bashrc) wins
+# over ~/.config/ai-ta/env for the students' own programs (jedy_skrobot's VLM
+# reads the environment first); `ta` itself always uses the file. Taken before
+# load_env replaces it. Never printed.
+readonly SHELL_AITA_KEY=${AITA_KEY:-}
+
+# For a 401 in the context: say whether an exported AITA_KEY is in play, so the
+# TA does not just answer "ta login again" (a new key in the file does not
+# help a program that reads the old exported one).
+key_override_note() {
+  [[ -n $SHELL_AITA_KEY ]] || return 0
+  local file_key env_file=${AITA_ENV_FILE/#$HOME/\~} same advice
+  file_key=$(sed -nE "s/^(export +)?AITA_KEY=['\"]?([^'\"]*)['\"]?\$/\2/p" "$AITA_ENV_FILE" 2>/dev/null | tail -1)
+  if [[ -n $file_key && $file_key == "$SHELL_AITA_KEY" ]]; then
+    same="$env_file のキーと同じ"
+    advice="キーは同じなので，401 ならキー自体が無効 (ta login で発行し直すと前のキーは無効になる)。ta login をやり直し，そのあと開いているターミナルでは 'unset AITA_KEY' する (export された古い値が残るため)。"
+  else
+    same="$env_file のキーと違う"
+    advice="401 の原因は，この古いキーの環境変数の可能性が高い: 'unset AITA_KEY' してから実行し直し，~/.bashrc などの 'export AITA_KEY=' の行を消す (ta login をやり直してもこの環境変数は変わらない)。"
+  fi
+  section "キーの設定 (401 / 認証エラーがあるため)" <<EOF
+環境変数 AITA_KEY がこのシェルで設定されている (export されている): $same。
+自作プログラム (jedy_skrobot の VLM など) は $env_file より環境変数を優先する。ta 自身はファイルのキーを使う。
+$advice
+EOF
+}
+
 bounded_context() {
   local out
   out=$(collect_context | redact)
+  if grep -qiE '(http|status|code|error)[^0-9]{0,12}401\b|unauthori[sz]ed|authentication_error|invalid api key' <<< "$out"; then
+    out="${out%</ta-context>}$(key_override_note)
+</ta-context>"
+  fi
   if (( ${#out} > CTX_MAX_BYTES )); then
     out="${out:0:$CTX_MAX_BYTES}
 …(長すぎるため切り詰めました)
@@ -178,10 +225,16 @@ bounded_context() {
 
 # Words that mean "a person or the hardware may be at risk right now". The AI
 # answer takes a minute or more; the first steps must not wait for it.
-readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱く|熱い|異音|異臭|ガリガリ|カチカチ|暴走|止まらない|挟ま|はさま|怪我|けが|ケガ|出血|やけど|火傷|感電|倒れ|落ち'
+readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱く|熱い|異音|異臭|ガリガリ|カチカチ|暴走|止まらない|挟ま|はさま|怪我|けが|ケガ|出血|やけど|火傷|感電|倒れ|転倒|転落|落下|落ち'
+# Arms dropping is what servo_off / the power switch does (the docs say so):
+# 「servo_off したら腕が落ちた」 is not an emergency. Taken out of the text
+# before SAFETY_RE; anything else that fell (ロボットが机から落ちた), and the
+# other words in the same message, still count.
+readonly ARM_DROP_RE='(腕|うで|アーム|手先|ハンド|グリッパ)(が|は|も)?(ゆっくり|すとんと|ストンと|だらんと|下に|下へ)?落ち'
 
 safety_first() {
   local text="$*"
+  while [[ $text =~ $ARM_DROP_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
   [[ $text =~ $SAFETY_RE ]] || return 0
   printf '\e[1;31m%s\e[0m\n' \
     "[ai-ta] 安全に関わる内容に見えます。AI の回答を待たずに，まず:" \
@@ -246,6 +299,7 @@ if b is not None and (i.get("spend") or 0.0) >= b:
       ANTHROPIC_DEFAULT_SONNET_MODEL="$AITA_MODEL" \
       ANTHROPIC_DEFAULT_HAIKU_MODEL="$AITA_FAST_MODEL" \
       CLAUDE_CODE_SUBAGENT_MODEL="$AITA_MODEL" \
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS="$AITA_MAX_CONTEXT_TOKENS" \
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
       DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1
     run_claude "${args[@]}" "$@"
@@ -260,14 +314,21 @@ run_claude() {
   for a in "$@"; do
     if [[ $a == -p || $a == --print ]]; then
       mkdir -p "$AITA_CACHE_DIR"
-      # Claude Code warns on every call that it does not know "ta-main" (a
-      # gateway alias); no setting turns that off, so drop those two lines.
+      # Print mode also writes a "[claude-code:unrecognized_model]" line for
+      # the gateway alias. The documented way to stop it (a modelOverrides
+      # entry) would make Claude Code treat ta-main as some Claude model, so
+      # drop the line here instead.
       claude "$@" 2> >(grep -vE "doesn't recognize the model|unrecognized_model" >&2) \
         | tee "$AITA_CACHE_DIR/last_answer.md"
       return "${PIPESTATUS[0]}"
     fi
   done
-  claude "$@"
+  local ec=0
+  claude "$@" || ec=$?
+  # On exit Claude Code prints "claude --resume <id>". Run as plain `claude`,
+  # that starts outside the AI TA (no course gateway, no TA prompt or settings).
+  info "続きから再開するときは 'claude --resume …' ではなく 'ta --continue' (直前の会話) か 'ta --resume' (一覧から選ぶ，ID も付けられる) を使ってください"
+  return "$ec"
 }
 
 cmd_call() {
@@ -318,6 +379,7 @@ cmd_review() {
 
 資料 robot-programming-2-2026.md の「実機に出す前のチェック」の各項目について，このファイルの該当行（file:line）と，問題があればその理由・直し方の方針を書いてください。
 - ファイルは書き換えないでください（直すのは学生）。
+- 該当行は $(basename "$file"):42 のようにそのまま書き，Markdown のリンクにしないでください。
 - チェック項目に反するもの（直してから実機へ）と，チェック項目に無い改善案（任意）を分けて書いてください。資料の「プログラムの形」やコード例と同じ書き方は指摘しないでください。
 - コードから分かる項目に問題がなければ，そう書いてください。
 - コードから分からない項目（周りに人や机が無いか，止まらないときに電源を切れる人がそばにいるか）は，学生に確かめるよう書いてください。"
@@ -341,6 +403,11 @@ cmd_run() {
   ln -sfn "$ts.meta" "$dir/latest.meta"
   # Keep the newest 50 runs.
   ls -t "$dir"/*.log 2>/dev/null | tail -n +51 | while read -r old; do rm -f "$old" "${old%.log}.meta"; done
+  # Ctrl-C / timeout are not failures: same rule as __aita_interrupted in
+  # ta-hook.bash (130, 148, 124; 2 and 254 from ros2).
+  if (( ec == 130 || ec == 148 || ec == 124 )) || { (( ec == 2 || ec == 254 )) && [[ $1 == ros2 ]]; }; then
+    return "$ec"
+  fi
   if (( ec != 0 )); then
     printf '%s\t%s\t%s\t%s\n' "$ec" "$(date +%s)" "$PWD" "$cmd" > "$AITA_CACHE_DIR/last_failed"
     info "exit $ec — 'ta fix' で AI TA に相談できます"
@@ -348,10 +415,30 @@ cmd_run() {
   return "$ec"
 }
 
+# One line on the camera-image VLM (vlm-gemini / vlm-er) from /key/info JSON on
+# stdin: whether this key's student agreed at `ta login` (metadata.vlm_consent,
+# the version of the text agreed to; the server refuses VLM requests without
+# it). The VLM's own daily spend is kept by the server and not shown to keys.
+vlm_consent_line() {
+  python3 -c '
+import json, sys
+try:
+    m = json.load(sys.stdin)["info"].get("metadata") or {}
+except (ValueError, KeyError, AttributeError):
+    sys.exit(1)
+if m.get("vlm_consent"):
+    print("同意済み (使える)")
+else:
+    print("同意していない (使えない。使うときは ta login をやり直して同意する)")
+'
+}
+
 cmd_usage() {
   load_env
-  curl -fsS -m 15 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" \
-    | python3 -c '
+  local info
+  info=$(curl -fsS -m 15 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY") \
+    || die "利用額を取得できませんでした ($AITA_BASE_URL/key/info)"
+  python3 -c '
 import json, sys
 i = json.load(sys.stdin)["info"]
 spend = i.get("spend") or 0.0
@@ -369,7 +456,8 @@ if budget is not None:
     line += f" / 上限 ${budget:.2f} ({period}ごとにリセット, 次回 {reset})"
 print(line)
 print(f"キー有効期限: {expires}")
-'
+' <<< "$info"
+  echo "カメラ画像を AI に送る機能 (vlm-gemini / vlm-er): $(vlm_consent_line <<< "$info")"
 }
 
 ta_version() {
@@ -379,13 +467,22 @@ ta_version() {
 cmd_doctor() {
   local ok=0 docs
   echo "  ai-ta-for-student $(ta_version)"
-  if [[ -f $AITA_ENV_FILE ]]; then load_env; echo "✓ キー設定: $AITA_ENV_FILE"; else echo "✗ キー未設定 (ta login，配られたキーファイルなら ta setup <file>)"; ok=1; fi
+  if [[ -f $AITA_ENV_FILE ]]; then
+    load_env; echo "✓ キー設定: $AITA_ENV_FILE"
+    if [[ -n $SHELL_AITA_KEY && $SHELL_AITA_KEY != "$AITA_KEY" ]]; then
+      echo "! 環境変数 AITA_KEY が $AITA_ENV_FILE と違うキーです。自作プログラム (VLM) はそちらを使います: 'unset AITA_KEY' し，~/.bashrc などの export を消す"
+    fi
+  else echo "✗ キー未設定 (ta login，配られたキーファイルなら ta setup <file>)"; ok=1; fi
   if command -v claude >/dev/null; then echo "✓ claude: $(claude --version 2>/dev/null)"; else echo "✗ claude 未インストール"; ok=1; fi
   if [[ -n ${AITA_KEY:-} ]]; then
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$AITA_BASE_URL/v1/models" -H "Authorization: Bearer $AITA_KEY" || true)
     case $code in
-      200) echo "✓ サーバー: $AITA_BASE_URL (認証 OK)" ;;
+      200) echo "✓ サーバー: $AITA_BASE_URL (認証 OK)"
+           local consent
+           if consent=$(curl -fsS -m 10 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" 2>/dev/null | vlm_consent_line); then
+             echo "- カメラ画像を AI に送る機能 (vlm-gemini / vlm-er): $consent"
+           fi ;;
       401|403) echo "✗ サーバー: $AITA_BASE_URL キーが無効 (HTTP $code)"; ok=1 ;;
       000) echo "✗ サーバー: $AITA_BASE_URL に接続できません (ネットワーク接続?)"; ok=1 ;;
       *) echo "✗ サーバー: $AITA_BASE_URL HTTP $code"; ok=1 ;;
@@ -546,6 +643,6 @@ case ${1:-} in
   setup)    shift; cmd_setup "$@" ;;
   login)    shift; cmd_login "$@" ;;
   version|--version|-V) echo "ai-ta-for-student $(ta_version)" ;;
-  -h|--help|help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)        safety_first "$@"; launch_claude "$@" ;;
 esac
