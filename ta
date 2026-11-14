@@ -274,11 +274,40 @@ readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱�
 # before SAFETY_RE; anything else that fell (ロボットが机から落ちた), and the
 # other words in the same message, still count.
 readonly ARM_DROP_RE='(腕|うで|アーム|手先|ハンド|グリッパ)(が|は|も)?(ゆっくり|すとんと|ストンと|だらんと|下に|下へ)?落ち'
+# Words for falling. In the simulator nothing real falls: 「Gazebo で立方体が
+# 台から落ちた」 raised the real-robot alert (a mock student). A message that
+# names the simulator and not the real robot drops these words; 煙, 焦げ, 発熱
+# and the rest still count.
+readonly FALL_RE='落ち|落下|倒れ|転倒|転落'
+readonly SIM_RE='[Gg]azebo|GAZEBO|ガゼボ|シミュレータ|シミュレーター|シミュレーション|[Ss]imulat|(^|[^A-Za-z])[Ss][Ii][Mm]([^A-Za-z]|$)'
+readonly REAL_RE='実機|本物|現実'
+# An object (not the robot) that fell or toppled: 「箱が台から落ちた」. The
+# subject particle must follow the object and the rest stays inside one
+# sentence; a match that names the robot (「箱がロボットに当たって倒れた」) is kept.
+readonly OBJECT_FALL_RE='(箱|はこ|ボックス|立方体|キューブ|ブロック|コップ|カップ|ボール|球|ペットボトル|ボトル|物体|物)(が|は|も)[^。．！？!?]{0,8}(落ち|落下|倒れ)'
+readonly ROBOT_WORD_RE='ロボット|ろぼっと|[Jj]edy|ジェディ|台車|本体|機体|人|自分|私'
+
+# Whether a message reads like a real-robot emergency (exit 0 = alert).
+safety_hit() {
+  # The bracket expressions above count characters only in a UTF-8 locale.
+  local LC_ALL=C.UTF-8
+  local text="$*" rest out="" m
+  while [[ $text =~ $ARM_DROP_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
+  rest=$text
+  while [[ $rest =~ $OBJECT_FALL_RE ]]; do
+    m=${BASH_REMATCH[0]}
+    if [[ $m =~ $ROBOT_WORD_RE ]]; then out+=${rest%%"$m"*}$m; else out+="${rest%%"$m"*} "; fi
+    rest=${rest#*"$m"}
+  done
+  text=$out$rest
+  if [[ $text =~ $SIM_RE && ! $text =~ $REAL_RE ]]; then
+    while [[ $text =~ $FALL_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
+  fi
+  [[ $text =~ $SAFETY_RE ]]
+}
 
 safety_first() {
-  local text="$*"
-  while [[ $text =~ $ARM_DROP_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
-  [[ $text =~ $SAFETY_RE ]] || return 0
+  safety_hit "$@" || return 0
   printf '\e[1;31m%s\e[0m\n' \
     "[ai-ta] 安全に関わる内容に見えます。AI の回答を待たずに，まず:" \
     "  1. 動いているプログラムを Ctrl-C で止める" \
@@ -319,7 +348,16 @@ if b is not None and (i.get("spend") or 0.0) >= b:
   local docs; docs=$(find_docs || true)
   # Claude Code's built-in skills (code review, API reference, ...) only cost
   # time and money here: the TA answers from the course docs.
-  local args=(--append-system-prompt-file "$AITA_SHARE_DIR/ta-prompt.md" --disallowed-tools Skill)
+  # Grep / Glob: native Linux builds leave them out and search through Bash
+  # (Claude Code 2.1.117+); naming them in --allowed-tools brings them back
+  # (https://code.claude.com/docs/en/tools-reference). They are read-only and
+  # never ask inside the working and --add-dir folders, while a Bash search
+  # with brace expansion (`rg ... robot-programming-{1,2}-2026.md`) asked
+  # despite the Bash(rg:*) rule and left `ta review` waiting ~5 minutes.
+  # --append-system-prompt-file comes last: the two lists before it take
+  # every following word, which would otherwise swallow the question.
+  local args=(--allowed-tools Grep Glob --disallowed-tools Skill
+              --append-system-prompt-file "$AITA_SHARE_DIR/ta-prompt.md")
   # Extra Claude Code flags, e.g. AITA_CLAUDE_ARGS="-p --continue" for
   # scripted / non-interactive use (tests, mock students).
   local extra=()
@@ -346,6 +384,10 @@ if b is not None and (i.get("spend") or 0.0) >= b:
       CLAUDE_CODE_RESUME_HINT_COMMAND="$PROG" \
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
       DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1
+    # The TA's syntax check (`python3 -m py_compile`) left __pycache__ in
+    # ~/enshu. py_compile ignores PYTHONDONTWRITEBYTECODE but follows
+    # PYTHONPYCACHEPREFIX (Python 3.8+), and so do the TA's Gazebo runs.
+    export PYTHONPYCACHEPREFIX="$AITA_CACHE_DIR/pycache"
     run_claude "${args[@]}" "$@"
   )
 }
