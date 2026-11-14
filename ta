@@ -268,40 +268,31 @@ bounded_context() {
 
 # Words that mean "a person or the hardware may be at risk right now". The AI
 # answer takes a minute or more; the first steps must not wait for it.
-readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱く|熱い|異音|異臭|ガリガリ|カチカチ|暴走|止まらない|挟ま|はさま|怪我|けが|ケガ|出血|やけど|火傷|感電|倒れ|転倒|転落|落下|落ち'
+readonly SAFETY_RE='煙|けむり|焦げ|こげ|発火|火花|燃え|発熱|熱く|熱い|異音|異臭|ガリガリ|カチカチ|変な音|暴走|止まらない|挟ま|はさま|挟ん|はさん|怪我|けが|ケガ|出血|やけど|火傷|感電|倒れ|転倒|転落|落下|落ち'
 # Arms dropping is what servo_off / the power switch does (the docs say so):
 # 「servo_off したら腕が落ちた」 is not an emergency. Taken out of the text
 # before SAFETY_RE; anything else that fell (ロボットが机から落ちた), and the
 # other words in the same message, still count.
 readonly ARM_DROP_RE='(腕|うで|アーム|手先|ハンド|グリッパ)(が|は|も)?(ゆっくり|すとんと|ストンと|だらんと|下に|下へ)?落ち'
-# Words for falling. In the simulator nothing real falls: 「Gazebo で立方体が
-# 台から落ちた」 raised the real-robot alert (a mock student). A message that
-# names the simulator and not the real robot drops these words; 煙, 焦げ, 発熱
-# and the rest still count.
-readonly FALL_RE='落ち|落下|倒れ|転倒|転落'
-readonly SIM_RE='[Gg]azebo|GAZEBO|ガゼボ|シミュレータ|シミュレーター|シミュレーション|[Ss]imulat|(^|[^A-Za-z])[Ss][Ii][Mm]([^A-Za-z]|$)'
-readonly REAL_RE='実機|本物|現実'
-# An object (not the robot) that fell or toppled: 「箱が台から落ちた」. The
-# subject particle must follow the object and the rest stays inside one
-# sentence; a match that names the robot (「箱がロボットに当たって倒れた」) is kept.
-readonly OBJECT_FALL_RE='(箱|はこ|ボックス|立方体|キューブ|ブロック|コップ|カップ|ボール|球|ペットボトル|ボトル|物体|物)(が|は|も)[^。．！？!?]{0,8}(落ち|落下|倒れ)'
-readonly ROBOT_WORD_RE='ロボット|ろぼっと|[Jj]edy|ジェディ|台車|本体|機体|人|自分|私'
+# An object that fell or toppled (「Gazebo で立方体が台から落ちた」 raised the
+# real-robot alert for a mock student) is not an emergency. Taken out only
+# when the object is the direct subject of the fall (object + が/は + at most
+# 4 characters of the same clause + 落ち/落下/倒れ) and the message names
+# neither the robot, a person nor the real world anywhere: 「Gazebo の後に
+# 動かしたら Jedy が倒れた」 and 「ボールはつかめたが机から落ちた」 still
+# alert. 物 right after 本/実 is 本物/実物. When unsure, alert.
+readonly OBJECT_FALL_RE='(^|[^本実])(箱|はこ|ボックス|立方体|キューブ|ブロック|コップ|カップ|ボール|球|ペットボトル|ボトル|物体|物)(が|は)[^。．！？!?、，,がはもをてで]{0,4}(落ち|落下|倒れ)'
+readonly ROBOT_WORD_RE='ロボット|ろぼっと|[Jj]edy|JEDY|ジェディ|実機|台車|本体|機体|サーボ|モータ|腕|うで|アーム|手|指|足|頭|人|自分|私|僕'
+readonly REAL_RE='実機|本物|現実|本番|実際|実物'
 
 # Whether a message reads like a real-robot emergency (exit 0 = alert).
 safety_hit() {
   # The bracket expressions above count characters only in a UTF-8 locale.
   local LC_ALL=C.UTF-8
-  local text="$*" rest out="" m
+  local text="$*"
   while [[ $text =~ $ARM_DROP_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
-  rest=$text
-  while [[ $rest =~ $OBJECT_FALL_RE ]]; do
-    m=${BASH_REMATCH[0]}
-    if [[ $m =~ $ROBOT_WORD_RE ]]; then out+=${rest%%"$m"*}$m; else out+="${rest%%"$m"*} "; fi
-    rest=${rest#*"$m"}
-  done
-  text=$out$rest
-  if [[ $text =~ $SIM_RE && ! $text =~ $REAL_RE ]]; then
-    while [[ $text =~ $FALL_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
+  if [[ ! $text =~ $ROBOT_WORD_RE && ! $text =~ $REAL_RE ]]; then
+    while [[ $text =~ $OBJECT_FALL_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
   fi
   [[ $text =~ $SAFETY_RE ]]
 }
