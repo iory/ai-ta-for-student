@@ -102,8 +102,7 @@ if ! grep -qF 'ai-ta/ta-hook.bash' "$HOME/.bashrc" 2>/dev/null; then
   echo "added hook to ~/.bashrc"
 fi
 # Python: record uncaught exceptions (tracebacks) for `ta fix`, in any terminal,
-# including `ros2 run` / launch Python nodes. Uninstall: delete these two files
-# and ~/.local/share/ai-ta/pyhook.
+# including `ros2 run` / launch Python nodes. `ta uninstall` removes them.
 PY_SITE=$(python3 -m site --user-site)
 mkdir -p "$PY_SITE"
 install -m 644 "$HERE/aita_pyhook.py" "$PY_SITE/aita_pyhook.py"
@@ -125,6 +124,8 @@ fi
 if ! command -v claude >/dev/null && [[ ! -x $BIN/claude ]]; then
   echo "Claude Code をダウンロードしています (1〜2 分)"
   curl -fsSL https://claude.ai/install.sh | bash
+  # `ta uninstall` removes Claude Code only when it was installed here.
+  touch "$SHARE/installed-claude"
   # The official installer ends with "~/.local/bin is not in your PATH. Run:
   # echo 'export PATH=...' >> ~/.bashrc" when this shell's PATH lacks it. The
   # ~/.bashrc line above already does that (for new terminals and after

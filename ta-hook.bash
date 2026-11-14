@@ -11,7 +11,20 @@ if [[ -f $__aita_pyhook_dir/sitecustomize.py && :${PYTHONPATH:-}: != *:"$__aita_
 fi
 
 __aita_cache=${AITA_CACHE_DIR:-$HOME/.cache/ai-ta}
+__aita_conf=${AITA_CONFIG_DIR:-$HOME/.config/ai-ta}
 __aita_last_histnum=
+
+# Whether the AI TA is in use: a key is set up and has not expired (`ta login`
+# / `ta doctor` write its expiry to $__aita_conf/expires). After the course,
+# or after `ta uninstall` even in terminals that were already open, the hook
+# records and prints nothing. Builtins only: it runs at every prompt.
+__aita_active() {
+  [[ -f $__aita_conf/env ]] || return 1
+  local exp=
+  [[ -f $__aita_conf/expires ]] && read -r exp < "$__aita_conf/expires"
+  [[ $exp =~ ^[0-9]+$ ]] || return 0
+  (( EPOCHSECONDS < exp ))
+}
 
 # Commands whose non-zero exit is routine (grep with no match, test, ...).
 __aita_ignore_re='^(grep|egrep|fgrep|rg|test|\[|\[\[|diff|cmp|false|which|type|command|ta|exit|clear)( |$)'
@@ -40,6 +53,7 @@ __aita_interrupted() {
 
 __aita_prompt() {
   local ec=$?
+  __aita_active || return $ec
   local line num cmd
   line=$(HISTTIMEFORMAT='' builtin history 1)
   num=${line%%[^ 0-9]*}; num=${num// /}
