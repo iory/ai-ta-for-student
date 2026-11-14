@@ -2,6 +2,18 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.4 (2026-11-14)
+
+- `ta fix` / `ta context`: tmux / byobu の画面は `ta` を実行したウィンドウのものを集める (別のウィンドウの画面を集めて，Traceback を見落としていた)．
+- 会話を終えたあと，再開は `claude --resume …` ではなく `ta --continue` / `ta --resume` で，と 1 行表示する (`claude` から再開すると AI TA の設定を通らない)．
+- 起動時の `Model "ta-main" isn't recognized` の警告を出さない (Claude Code の設定 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` で会話の長さの上限を 200k トークンにした．長い会話は 200k で要約される)．
+- `[ai-ta] exit N` の 1 行を，Ctrl-C (130)，`timeout` (124)，`ros2` コマンドを Ctrl-C で止めたとき (2，`ros2 run` は 254) には出さない．
+- `ta usage` / `ta doctor`: カメラ画像を AI に送る機能 (VLM) に同意したかを表示する．`ta doctor` は，環境変数 `AITA_KEY` が `~/.config/ai-ta/env` と違うキーのときに知らせる．
+- `ta fix`: 401 (キーが受け付けられない) があり，環境変数 `AITA_KEY` が設定されているときは，そのことを AI TA に伝える (古いキーが export されていると，`ta login` をやり直しても自作プログラムは古いキーを使う)．
+- 「servo_off したら腕が落ちた」で安全の警告を出さない (腕が落ちるのは正常)．「落下」「転倒」「ロボットが机から落ちた」などは今まで通り出す．
+- AI TA への指示: 「実機が動かない」「Gazebo が真っ黒」のような短い質問には，資料にあるよくある原因と確かめ方を挙げてから聞き返す．「資料:」には答えの根拠にした節だけを挙げる．資料は `rg` で探す．`ta review` の file:line をリンクにしない．演習の名前を「知能ロボット行動プログラミング演習」にそろえる．
+- `install.sh`: Claude Code のダウンロードの前に「1〜2 分」と表示し，公式インストーラの「~/.local/bin is not in your PATH」の案内は無視してよいと表示する (ai-ta が `~/.bashrc` に追加済み)．
+
 ## 0.2.3 (2026-11-14)
 
 - `ta login` で同意を聞く (y/n)．
