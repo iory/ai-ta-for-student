@@ -2,6 +2,12 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.5 (2026-11-14)
+
+- `ta uninstall` を足した．`~/.bashrc` に足した行，Python の例外を記録するフック，キー，`ta` 本体などをまとめて消す．Claude Code は `install.sh` が入れたときだけ消す (`--claude` で必ず消す)．
+- キーが無いとき・キーの有効期限を過ぎたあとは，`[ai-ta] exit N` の表示と Python の例外の記録をしない (演習が終わっても `ta uninstall` を忘れると出続けていた)．期限は `ta doctor` / `ta login` / `ta setup` が `~/.config/ai-ta/expires` に書く．`ta uninstall` のあとは，開いたままのターミナルでも表示が止まる．
+- 以上 2 つは @Michi-Tsubaki さんのフィードバックによる (thanks!)．
+
 ## 0.2.4 (2026-11-14)
 
 - `ta fix` / `ta context`: tmux / byobu の画面は `ta` を実行したウィンドウのものを集める (別のウィンドウの画面を集めて，Traceback を見落としていた)．

@@ -14,6 +14,7 @@
 #   ta login              GitHub でログインして自分のキーを設定 (再実行で発行し直し)
 #   ta setup <keyfile>    配布されたキーファイルを設定
 #   ta version            入っている版 (更新はインストールのコマンドをもう一度)
+#   ta uninstall [-y]     AI TA を消す (~/.bashrc の行，Python のフック，キー，ta 本体)
 set -euo pipefail
 
 readonly PROG=ta
@@ -479,9 +480,12 @@ cmd_doctor() {
     code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$AITA_BASE_URL/v1/models" -H "Authorization: Bearer $AITA_KEY" || true)
     case $code in
       200) echo "✓ サーバー: $AITA_BASE_URL (認証 OK)"
-           local consent
-           if consent=$(curl -fsS -m 10 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" 2>/dev/null | vlm_consent_line); then
-             echo "- カメラ画像を AI に送る機能 (vlm-gemini / vlm-er): $consent"
+           local info consent
+           if info=$(curl -fsS -m 10 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" 2>/dev/null); then
+             if consent=$(vlm_consent_line <<< "$info"); then
+               echo "- カメラ画像を AI に送る機能 (vlm-gemini / vlm-er): $consent"
+             fi
+             save_key_expiry <<< "$info" || true
            fi ;;
       401|403) echo "✗ サーバー: $AITA_BASE_URL キーが無効 (HTTP $code)"; ok=1 ;;
       000) echo "✗ サーバー: $AITA_BASE_URL に接続できません (ネットワーク接続?)"; ok=1 ;;
@@ -622,6 +626,84 @@ PY
   cmd_doctor || true
 }
 
+# The key's expiry (epoch seconds) for the bash / Python hooks: past it they do
+# nothing, so a student who never runs `ta uninstall` does not get the
+# "[ai-ta] exit N" line and the traceback recording for ever after the
+# course. stdin: the /key/info JSON. No expiry = no file.
+save_key_expiry() {
+  local out=$AITA_CONFIG_DIR/expires exp
+  exp=$(python3 -c '
+import json, sys
+from datetime import datetime, timezone
+exp = json.load(sys.stdin)["info"].get("expires")
+if exp:
+    t = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    print(int(t.timestamp()))
+') || return 1
+  if [[ -n $exp ]]; then
+    printf '%s\n' "$exp" > "$out.tmp" && mv "$out.tmp" "$out"
+  else
+    rm -f "$out"
+  fi
+}
+
+# The lines install.sh adds to ~/.bashrc (exact lines, so a student's own
+# lines are never touched).
+readonly BASHRC_LINES=(
+  '# AI TA: record failed commands for `ta fix`'
+  '[ -f ~/.local/share/ai-ta/ta-hook.bash ] && . ~/.local/share/ai-ta/ta-hook.bash'
+  'case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin'
+)
+
+cmd_uninstall() {
+  local yes='' claude='' arg reply site
+  for arg in "$@"; do
+    case $arg in
+      -y|--yes) yes=1 ;;
+      --claude) claude=1 ;;
+      *) die "使い方: ta uninstall [-y] [--claude]" ;;
+    esac
+  done
+  # Claude Code goes too when install.sh installed it (0.2.5+ leaves a mark).
+  [[ -f $AITA_SHARE_DIR/installed-claude ]] && claude=1
+  site=$(python3 -m site --user-site 2>/dev/null || true)
+  local -a paths=("$HOME/.local/bin/ta" "$AITA_SHARE_DIR" "$AITA_CONFIG_DIR" "$AITA_CACHE_DIR")
+  [[ -n $site ]] && paths+=("$site/aita_pyhook.py" "$site/aita-pyhook.pth")
+  [[ -n $claude ]] && paths+=("$HOME/.local/bin/claude" "$HOME/.local/share/claude")
+  echo "AI TA を消します (サーバーにある記録は消えません):"
+  echo "  ~/.bashrc に足した ai-ta の行 (元は ~/.bashrc.ai-ta-backup に残す)"
+  local p
+  for p in "${paths[@]}"; do
+    [[ -e $p || -L $p ]] && echo "  ${p/#$HOME/\~}"
+  done
+  echo "  (キー・AI TA との会話の記録・ta fix 用の記録もこの中に入っている)"
+  if [[ -z $yes ]]; then
+    read -r -p "消しますか? [y/N]: " reply < /dev/tty || reply=
+    [[ $reply == [yY]* ]] || { echo "中止しました"; return 1; }
+  fi
+  if [[ -f $HOME/.bashrc ]] && grep -qxF -f <(printf '%s\n' "${BASHRC_LINES[@]}") "$HOME/.bashrc"; then
+    cp -p "$HOME/.bashrc" "$HOME/.bashrc.ai-ta-backup"
+    # Write in place (cat >) so a symlinked ~/.bashrc and its mode stay.
+    local kept
+    kept=$(grep -vxF -f <(printf '%s\n' "${BASHRC_LINES[@]}") "$HOME/.bashrc" || true)
+    printf '%s\n' "$kept" > "$HOME/.bashrc"
+    echo "~/.bashrc から ai-ta の行を消しました"
+  fi
+  [[ -n $site ]] && rm -f "$site"/__pycache__/aita_pyhook.*.pyc
+  for p in "${paths[@]}"; do
+    rm -rf -- "$p"
+  done
+  echo "消しました。開いているターミナルでも [ai-ta] の表示はもう出ません。"
+  if [[ -z $claude ]] && command -v claude >/dev/null; then
+    echo "Claude Code は残しています (AI TA より前から入っていたか，0.2.4 以前で入れたもの)。消すなら: rm -rf ~/.local/bin/claude ~/.local/share/claude"
+  fi
+  # This script was just deleted; bash keeps reading it from the open file, so
+  # end here.
+  exit 0
+}
+
 cmd_setup() {
   local src=${1:?使い方: ta setup <配布されたキーファイル>}
   [[ -f $src ]] || die "$src がありません"
@@ -642,7 +724,8 @@ case ${1:-} in
   doctor)   cmd_doctor ;;
   setup)    shift; cmd_setup "$@" ;;
   login)    shift; cmd_login "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
   version|--version|-V) echo "ai-ta-for-student $(ta_version)" ;;
-  -h|--help|help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)        safety_first "$@"; launch_claude "$@" ;;
 esac

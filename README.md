@@ -48,6 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 | `ta call [メッセージ]` | 人の TA・教員を呼ぶ．エラーの情報も一緒に届く |
 | `ta context` | `ta fix` が送る内容を表示するだけ (何も送らない) |
 | `ta usage` | 今日の利用額と上限，カメラ画像を AI に送る機能 (VLM) に同意したか |
+| `ta uninstall` | AI TA を消す (演習が終わったら．[アンインストール](#アンインストール)) |
 | `ta setup <キーファイル>` | 配られたキーファイルで設定する (`ta login` を使わない場合) |
 | `ta version` | 入っている版 |
 
@@ -67,5 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 
 ## アンインストール
 
-`~/.local/bin/ta`，`~/.local/share/ai-ta`，`~/.config/ai-ta`，`~/.bashrc` に足された ai-ta の行，
-Python のユーザ site-packages の `aita_pyhook.py` と `aita-pyhook.pth` を消す．
+演習が終わったら次を実行する．
+
+```bash
+ta uninstall      # 消すものを表示して確認してから消す (-y で確認なし)
+```
+
+- `~/.bashrc` に足した ai-ta の行 (元の `~/.bashrc` は `~/.bashrc.ai-ta-backup` に残す)，Python の例外を記録するフック (`aita_pyhook.py`，`aita-pyhook.pth`)，`~/.local/share/ai-ta`，`~/.config/ai-ta` (キーと AI TA との会話)，`~/.cache/ai-ta`，`~/.local/bin/ta` を消す．
+- Claude Code は，`install.sh` が入れたとき (0.2.5 以降) だけ一緒に消す．前から入っていたものは残す．`--claude` を付けると必ず消す．
+- 消し忘れても，キーの有効期限を過ぎると `[ai-ta] exit N` の表示と Python の例外の記録は止まる (`ta doctor` / `ta login` がキーの期限を `~/.config/ai-ta/expires` に書く)．
+- サーバーにある質問と答えの記録は消えない．

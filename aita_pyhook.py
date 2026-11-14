@@ -1,7 +1,8 @@
 """ai-ta: record uncaught Python exceptions so `ta fix` can include them.
 
 Loaded at interpreter start by ``aita-pyhook.pth`` in the user site-packages
-(installed by ``install.sh``; remove both files to uninstall). It chains to
+(installed by ``install.sh``; ``ta uninstall`` removes them). It does nothing
+when no key is set up or the key has expired (after the course). It chains to
 the existing ``sys.excepthook`` / ``threading.excepthook``, so tracebacks
 still print exactly as before. It only writes a small file under
 ``~/.cache/ai-ta/py_errors``; nothing is sent anywhere until the student
@@ -17,6 +18,7 @@ _DIR = os.path.join(
     os.environ.get("AITA_CACHE_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "ai-ta"),
     "py_errors",
 )
+_CONF = os.environ.get("AITA_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".config", "ai-ta")
 _KEEP = 20
 _SKIP = (KeyboardInterrupt, SystemExit)
 
@@ -54,6 +56,25 @@ def _record(exc_type, exc_value, exc_tb, thread_name=None):
             os.remove(os.path.join(_DIR, name))
     except Exception:
         pass
+
+
+def _active():
+    """Whether a key is set up and has not expired (see ``ta-hook.bash``)."""
+    try:
+        if not os.path.isfile(os.path.join(_CONF, "env")):
+            return False
+        try:
+            with open(os.path.join(_CONF, "expires"), encoding="ascii") as f:
+                exp = f.read().strip()
+        except OSError:
+            return True
+        if not exp.isdigit():
+            return True
+        import time
+
+        return time.time() < int(exp)
+    except Exception:
+        return False
 
 
 def _install():
@@ -101,6 +122,7 @@ def _install_after_sitecustomize():
     site.execsitecustomize = wrapped
 
 
-if os.environ.get("AITA_PYHOOK", "1") != "0" and not getattr(sys, "_aita_pyhook", False):
+if (os.environ.get("AITA_PYHOOK", "1") != "0" and not getattr(sys, "_aita_pyhook", False)
+        and _active()):
     sys._aita_pyhook = True
     _install_after_sitecustomize()
