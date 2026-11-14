@@ -2,6 +2,12 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.6 (2026-11-14)
+
+- `ta fix` / `ta context`: tmux / byobu の画面は，同じセッションの全ウィンドウ・全ペインから集める (ipython や自分のプログラムを別のウィンドウで動かし，3 つ目のウィンドウで `ta fix` すると，Traceback を見落としていた)．`ta` を実行した画面は 150 行，ほかは 60 行．見出しにウィンドウ番号・名前・ペイン番号を書き，`Traceback` / `Error` / `[ERROR]` のある画面を先に並べる．画面は合わせて 30000 文字まで (`AITA_CTX_PANES_MAX_BYTES`)．入りきらない画面は名前だけ書く．
+- 会話を終えたとき，Claude Code が表示する再開のコマンドを `claude --resume <ID>` ではなく `ta --resume <ID>` にした (Claude Code 2.1.323 以降の設定 `CLAUDE_CODE_RESUME_HINT_COMMAND`)．`ta` の案内の行は出さない (違うコマンドが 2 つ出ていた)．それより古い Claude Code では，「↑ の `claude --resume` ではなく `ta --continue` / `ta --resume` で」と出す．
+- AI TA への指示: 学生のプログラムは `~/enshu/` に置く (ホーム直下に保存させていた)．`ta review` で，距離画像・物の位置を使うコードが実機の D405 の測れる範囲 (資料では 0.07〜0.5 m くらい，遠いと nan / `None`) に頼っていないかを確かめる (Gazebo では遠くの物にも近づけるが，実機ではすぐ止まる)．
+
 ## 0.2.5 (2026-11-14)
 
 - `ta uninstall` を足した．`~/.bashrc` に足した行，Python の例外を記録するフック，キー，`ta` 本体などをまとめて消す．Claude Code は `install.sh` が入れたときだけ消す (`--claude` で必ず消す)．

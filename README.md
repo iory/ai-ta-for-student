@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 |---|---|
 | `ta` / `ta "質問"` | AI TA と会話を始める．演習資料を読んで答える |
 | `ta --continue` / `ta --resume` | 前の会話の続きから始める (`--resume` は一覧から選ぶ．ID も付けられる) |
-| `ta fix [メモ]` | 直前のエラーを集めて直し方を聞く: 最後に失敗したコマンド，`ta run` の出力，tmux / byobu の画面，最新の launch のログ，Python の Traceback，ROS の環境変数 (どれも 30 分以内のもの) |
+| `ta fix [メモ]` | 直前のエラーを集めて直し方を聞く: 最後に失敗したコマンド，`ta run` の出力，tmux / byobu の画面 (同じセッションの全ウィンドウ，エラーのある画面が先)，最新の launch のログ，Python の Traceback，ROS の環境変数 (どれも 30 分以内のもの) |
 | `ta run <コマンド>` | コマンドの出力を全部記録しながら実行する．長い出力を `ta fix` に渡したいときに使う |
 | `ta review <ファイル.py>` | 実機で動かす前のチェック項目に照らしてコードを見てもらう |
 | `ta call [メッセージ]` | 人の TA・教員を呼ぶ．エラーの情報も一緒に届く |
@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 | `ta version` | 入っている版 |
 
 - コマンドが失敗すると `[ai-ta] exit N — "ta fix" で…` という 1 行が出る．Ctrl-C や `timeout` で止めたとき (exit 130, 124，`ros2` コマンドの 2 と 254) は出ない．`AITA_QUIET=1` で消せる．
-- 会話を終えると Claude Code が `claude --resume …` と表示するが，`claude` から再開すると AI TA の設定を通らない．続きは `ta --continue` か `ta --resume` で始める．
+- 会話を終えると Claude Code が `ta --resume <ID>` と表示する (Claude Code 2.1.323 以降)．続きは `ta --continue` か `ta --resume` で始める．`claude --resume …` から再開すると AI TA の設定を通らない．
 - AI TA がコマンドを実行したりファイルを書き換えたりするときは，毎回確認を求める (`~/enshu` の中のファイルの書き換えと，資料を読むコマンドは確認なしで行う)．
   Gazebo での確認 (起動，プログラムの実行) は AI TA が実行することがある．
   実機を動かすコマンドは，周りに人や机が無いか・電源を切れる人がそばにいるかを学生に聞いてから実行する．
