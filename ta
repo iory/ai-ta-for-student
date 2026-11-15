@@ -47,6 +47,11 @@ readonly CTX_PANES_MAX_BYTES=${AITA_CTX_PANES_MAX_BYTES:-30000}
 readonly CTX_ROSLOG_LINES=${AITA_CTX_ROSLOG_LINES:-80}
 readonly CTX_PYERR_LINES=${AITA_CTX_PYERR_LINES:-80}
 readonly CTX_MAX_AGE_MIN=${AITA_CTX_MAX_AGE_MIN:-30}
+# Recent commands from the shell hook (recent_cmds), and the start of each
+# failed package's stderr from the newest `colcon build` log.
+readonly CTX_RECENT_CMDS=${AITA_CTX_RECENT_CMDS:-30}
+readonly CTX_COLCON_LINES=${AITA_CTX_COLCON_LINES:-60}
+readonly CTX_COLCON_MAX_PKGS=${AITA_CTX_COLCON_MAX_PKGS:-3}
 readonly CTX_MAX_BYTES=${AITA_CTX_MAX_BYTES:-60000}
 readonly CTX_ROBOT_STATE_S=${AITA_CTX_ROBOT_STATE_S:-3}
 
@@ -154,6 +159,64 @@ collect_panes() {
   fi
 }
 
+# The shell hook's command history (exit, epoch, cwd, command per line), the
+# ones from the last CTX_MAX_AGE_MIN minutes, newest last. Debugging goes
+# through several commands; the one that matters (`colcon build`) is often not
+# the last one that failed (an `ls` or `ros2 pkg list` typed while looking).
+collect_recent_cmds() {
+  local f=$AITA_CACHE_DIR/recent_cmds since
+  [[ -f $f ]] || return 0
+  since=$(( $(date +%s) - CTX_MAX_AGE_MIN * 60 ))
+  awk -F'\t' -v since="$since" -v home="$HOME" '
+    $2 >= since {
+      cwd = $3; if (index(cwd, home) == 1) cwd = "~" substr(cwd, length(home) + 1)
+      printf "%s exit %-3s %s$ %s\n", strftime("%H:%M", $2), $1, cwd, $4
+    }' "$f" | tail -n "$CTX_RECENT_CMDS" \
+    | section "最近のコマンド (直近 ${CTX_MAX_AGE_MIN} 分，新しいものが下。exit 0 以外が失敗)"
+}
+
+# The newest `colcon build` log of the workspace the student built in: colcon
+# keeps every package's output in <ws>/log/latest_build/<pkg>/, so the build
+# error is there even when the screen has scrolled past it or was cleared,
+# and outside tmux. Packages that failed (rc != 0 in events.log) come with
+# the start of their stderr.log, where CMake / the compiler print the first
+# error. The workspace: where recent `colcon build`s ran, then $PWD.
+collect_colcon() {
+  local f=$AITA_CACHE_DIR/recent_cmds ws log dir age pkg n=0
+  local -a cands=()
+  if [[ -f $f ]]; then
+    mapfile -t cands < <(awk -F'\t' '$4 ~ /(^|[ ;&|])colcon +build/ { print $3 }' "$f" | tac | awk '!seen[$0]++')
+  fi
+  cands+=("$PWD")
+  for ws in "${cands[@]}"; do
+    log=$ws/log/latest_build
+    [[ -f $log/events.log ]] || continue
+    age=$(age_min "$log/events.log")
+    (( age <= CTX_MAX_AGE_MIN )) || continue
+    dir=$(readlink -f "$log")
+    local -a failed=()
+    mapfile -t failed < <(grep -F 'JobEnded:' "$log/events.log" | grep -vF "'rc': 0}" \
+                            | sed -nE "s/.*'identifier': '([^']+)'.*/\1/p")
+    if (( ${#failed[@]} == 0 )); then
+      printf 'colcon build: %s (%s分前) は全パッケージ成功\n' "${dir/#$HOME/\~}" "$age" \
+        | section "最新の colcon build"
+      return 0
+    fi
+    printf '%s\n' "${failed[@]}" | section "最新の colcon build で失敗したパッケージ (${dir/#$HOME/\~}, ${age}分前)"
+    for pkg in "${failed[@]}"; do
+      (( n++ < CTX_COLCON_MAX_PKGS )) || break
+      if [[ -s $dir/$pkg/stderr.log ]]; then
+        head -n "$CTX_COLCON_LINES" "$dir/$pkg/stderr.log" \
+          | section "colcon build: $pkg の stderr.log (先頭 $CTX_COLCON_LINES 行)"
+      elif [[ -f $dir/$pkg/stdout_stderr.log ]]; then
+        tail -n "$CTX_COLCON_LINES" "$dir/$pkg/stdout_stderr.log" \
+          | section "colcon build: $pkg の出力 (末尾 $CTX_COLCON_LINES 行)"
+      fi
+    done
+    return 0
+  done
+}
+
 collect_context() {
   local f ec ts cwd cmd
   echo "<ta-context>"
@@ -165,6 +228,9 @@ collect_context() {
     printf '\n### 直前に失敗したコマンド (%s分前)\n```\n$ %s\n(exit %s, cwd %s)\n```\n' \
       "$(age_min "$f")" "$cmd" "$ec" "$cwd"
   fi
+
+  collect_recent_cmds
+  collect_colcon
 
   f=$AITA_CACHE_DIR/runs/latest.log
   if [[ -f $f && $(age_min "$f") -le $CTX_MAX_AGE_MIN ]]; then

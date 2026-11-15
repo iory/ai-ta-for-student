@@ -39,12 +39,26 @@ __aita_interrupted() {
 
 __aita_preexec() { __aita_cmd=$1 }
 
+# Every command with its exit code, for `ta fix` (see ta-hook.bash).
+__aita_recent_n=0
+__aita_record() {
+  [[ -d $__aita_cache ]] || mkdir -p "$__aita_cache"
+  # One line per command: a multi-line command (here-doc, loop) is joined.
+  local c=${2//$'\n'/ ⏎ }
+  printf '%s\t%s\t%s\t%s\n' "$1" "$EPOCHSECONDS" "$PWD" "${c//$'\t'/ }" >> "$__aita_cache/recent_cmds"
+  if (( ++__aita_recent_n % 50 == 0 )); then
+    local keep=${AITA_RECENT_KEEP:-100} tmp=$__aita_cache/recent_cmds.$$
+    tail -n "$keep" "$__aita_cache/recent_cmds" > "$tmp" && mv -f "$tmp" "$__aita_cache/recent_cmds"
+  fi
+}
+
 __aita_precmd() {
   local ec=$? cmd=$__aita_cmd
   __aita_cmd=
   # An empty line runs no command: nothing to record.
   [[ -n $cmd ]] || return $ec
   __aita_active || return $ec
+  __aita_record $ec "$cmd"
   if (( ec != 0 )) && ! __aita_interrupted $ec "$cmd" && [[ ! $cmd =~ $__aita_ignore_re ]]; then
     mkdir -p "$__aita_cache"
     printf '%s\t%s\t%s\t%s\n' "$ec" "$(date +%s)" "$PWD" "$cmd" > "$__aita_cache/last_failed"
