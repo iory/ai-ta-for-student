@@ -2,6 +2,13 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.13 (2026-11-16)
+
+- AI TA (`ta`) の既定を auto mode にした．AI TA が実行するコマンドやファイルの書き換えは，Claude Code の判定が安全と見たものは確認なしで行い，危ないものは止める．ロボットを動かすコマンド (`ros2 run`, `ros2 launch` など) も，今までのように毎回は聞かない (危ないときは人が止める)．Shift+Tab で manual mode (毎回確認) に切り替えられる．
+- auto mode の判定は，ふつうは Anthropic のサーバー側で行われ，演習のサーバーを通すと届かない．`ta` は `CLAUDE_CODE_AUTO_MODE_SERVER=0` と `CLAUDE_CODE_AUTO_MODE_MODEL=ta-main` を設定し，判定も演習のサーバー経由で AI TA のモデルに頼む．
+- 作業フォルダ (`~`) の外 (`/tmp` のログ，`/opt/ros` など) も確認なしで読む (auto mode で最初に 1 回出る「外を読んでよいか」の確認を出さない)．
+- キーや `~/.ssh` を読まない・`env` / `printenv` を実行しない決まり (deny) はそのまま．AI TA への指示の「実機の launch が動いていないことを確かめてから Gazebo で実行する」もそのまま．
+
 ## 0.2.12 (2026-11-16)
 
 - 長い出力 (`find` の一覧，`robot_description` など) を AI TA が読めるようにした．Claude Code は長い出力を `~/.config/ai-ta/claude/projects/.../tool-results/` に保存してそこから読むが，キーを守るために `~/.config/ai-ta` 全体の読み込みを禁止していたので，自分の出力を読めずに「最後まで読めなかった」と答えていた．読み込みの禁止を，キーの入った `~/.config/ai-ta/env` と Claude Code の内部ファイル (`.claude.json`，`backups`，`shell-snapshots`，`session-env`) に絞った．書き換えの禁止は今までどおり `~/.config/ai-ta` 全体．`ta` を入れ直すと設定も新しくなる．

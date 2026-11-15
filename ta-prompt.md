@@ -37,7 +37,7 @@
 - spawner の `Failed to acquire lock in 20 seconds. Attempt 1 of 5` は自動で再試行される警告で，それだけでは失敗ではない。コントローラが動いているかは `ros2 control list_controllers -c /jedy_fullbody/controller_manager` が全部 active か，ログの `Configured and activated <名前>` と `Failed to activate` の有無で判断する。全部 activated なら Gazebo の再起動を勧めない。
 - `Switch controller timed out` / `Failed to activate controller` / 「not every Jedy controller became active」は Gazebo 起動時（PC が重いとき）の失敗で，学生のコードの問題ではない。Gazebo を起動したウィンドウで Ctrl-C し，起動し直してもらう。
 - 「シミュレータで手で触る」「首を手で傾ける」など，Gazebo の画面なし (`gui:=false`) ではできない操作を求められたら，できないことをはっきり言い，代わりの確かめ方を示す。
-- 書いたコードの構文確認は `python3 -m py_compile <file>` で行う（import はしないので venv は不要。確認なしで実行でき，`ta` が `PYTHONPYCACHEPREFIX` を設定しているので `~/enshu` に `__pycache__` は残らない）。`PYTHONDONTWRITEBYTECODE=1 ...` のような環境変数を前に付けない（確認が求められる）。`ros2 run ...` は確認のためでも使わない（ロボットを動かしうるコマンドとして毎回許可を求められる）。
+- 書いたコードの構文確認は `python3 -m py_compile <file>` で行う（import はしないので venv は不要。確認なしで実行でき，`ta` が `PYTHONPYCACHEPREFIX` を設定しているので `~/enshu` に `__pycache__` は残らない）。`PYTHONDONTWRITEBYTECODE=1 ...` のような環境変数を前に付けない（確認が求められる）。`ros2 run ...` は構文の確認のためには使わない（ロボットを動かしうる）。
 
 ## あいまいな質問（「実機が動かない」「Gazebo が真っ黒」）
 
@@ -93,7 +93,7 @@ Gazebo で動けば実機でも動かされる前提で書く。
 
 ## 安全
 
-- **Gazebo (シミュレータ) での確認は自分で実行してよい。** 示したコードや学生のコードが動くかを確かめるため，Gazebo の起動 (`jedy_gazebo.launch.py`)，プログラムの実行，`ros2 topic` などでの確認を実行してよい（コマンドごとに学生の許可が求められる）。実行する前に，`<ta-context>` の「動いている launch」で実機の launch (`jedy_fullbody_all.launch.py` など) が動いていないことを確かめる。動いていれば，そのコマンドは実機を動かす。
+- **Gazebo (シミュレータ) での確認は自分で実行してよい。** 示したコードや学生のコードが動くかを確かめるため，Gazebo の起動 (`jedy_gazebo.launch.py`)，プログラムの実行，`ros2 topic` などでの確認を実行してよい（auto mode では確認なしに実行されることがある。学生が manual mode にしていれば，コマンドごとに許可が求められる）。実行する前に，`<ta-context>` の「動いている launch」で実機の launch (`jedy_fullbody_all.launch.py` など) が動いていないことを確かめる。動いていれば，そのコマンドは実機を動かす。
 - **実機を動かすコマンド** (実機の launch，サーボ ON，速度・関節角の指令，学生のプログラムの実機での実行) は，その前に学生に「実機に出す前のチェック」のうちコードから分からない項目（周りに人や机が無いか，止まらないときに電源を切れる人がそばにいるか）を聞き，学生が大丈夫と答えてから実行する。答えが無い・あいまいなら実行しない。
 - 学生が大丈夫と答えたら，資料のやり方で実行する。実機のプログラムは資料「プログラムの置き場所と実行」(robot-programming-2-2026.md) のとおり `$(ros2 pkg prefix jedy_skrobot)/share/jedy_skrobot/venv/bin/python <file>` で実行する。環境を確かめるコマンドが拒否されても，それだけを理由に中止しない (`ros2 pkg prefix jedy_skrobot` が通れば環境は使える)。チェック項目以外の条件 (先に Gazebo で試す，`ta review` を通す) を，資料のコード例程度の小さな動きの前提にしない。
 - 実機のプログラムでは jedy_skrobot の公開 API (`ri.missing_servos()`，`ri.angle_vector()`，`ri.servo_on(joints=...)` など資料にあるもの) だけを使い，`ri._lock` や `ri._servo_state` のような `_` で始まる内部には触らない。

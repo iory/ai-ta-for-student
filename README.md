@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install
 
 - コマンドが失敗すると `[ai-ta] exit N — "ta fix" で…` という 1 行が出る．Ctrl-C や `timeout` で止めたとき (exit 130, 124，`ros2` コマンドの 2 と 254) は出ない．`AITA_QUIET=1` で消せる．
 - 会話を終えると Claude Code が `ta --resume <ID>` と表示する (Claude Code 2.1.323 以降)．続きは `ta --continue` か `ta --resume` で始める．`claude --resume …` から再開すると AI TA の設定を通らない．
-- AI TA がコマンドを実行したりファイルを書き換えたりするときは，毎回確認を求める (`~/enshu` の中のファイルの書き換えと，資料を読むコマンドは確認なしで行う)．
+- 既定は auto mode：AI TA が実行するコマンドやファイルの書き換えは，AI が安全かを判定し，問題ないと判断したものは確認なしで行う (ロボットを動かすコマンドも含む．危ないときは人が止める)．Shift+Tab で manual mode にすると，毎回確認を求める (`~/enshu` の中の書き換えと，資料を読むコマンドは manual mode でも確認なし)．
   Gazebo での確認 (起動，プログラムの実行) は AI TA が実行することがある．
   実機を動かすコマンドは，周りに人や机が無いか・電源を切れる人がそばにいるかを学生に聞いてから実行する．
 - 実機で動かす前に，`ta review` でコードを見てもらうとよい．

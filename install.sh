@@ -38,18 +38,19 @@ install -m 755 "$HERE/ta" "$BIN/ta"
 install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/ta-hook.zsh" "$HERE/aita_robot_state.py" "$HERE/VERSION" "$SHARE/"
 
 # Claude Code settings for the TA profile only (separate CLAUDE_CONFIG_DIR).
-# defaultMode "default": every command / edit asks the student first. Auto
-# mode is the CLI default, but its safety check is server-side and does not
-# pass through the course gateway, and robots should not be moved unasked.
-# The deny rules keep the key file out of the model's reach.
-# "ask" outranks "allow": commands that can move the robot always ask, even
-# after a student picks "don't ask again" (a mock student was offered that for
-# `ros2 run *` on every `ros2 run ... py_compile`). Syntax checks and reading
-# the course workspace are allowed outright, so the prompts that remain are
-# the ones worth reading (a mock session had 9 in one request). Edits inside
-# ~/enshu (the students' own demo folder) are allowed too: building a demo
-# asked 20-30 times per hour, and the mock students switched to accept-all
-# edits, which also covers files outside ~/enshu.
+# defaultMode "auto": Claude Code's classifier decides which tool calls run
+# without asking and blocks the risky ones. Its server-side review does not
+# pass through the course gateway, so `ta` sets CLAUDE_CODE_AUTO_MODE_SERVER=0
+# and the classifier requests go through the gateway to the TA model
+# (checked 2026-11-16: an unlisted `ros2 topic echo --once` ran unasked).
+# Commands that move the robot (`ros2 run`, `ros2 launch`, the students'
+# programs) are left to the classifier too, as the course staff decided: a
+# person stands by the robot and stops it. ta-prompt.md still makes the TA
+# check that no real-robot launch is running before it runs anything in
+# Gazebo. Shift+Tab switches a session to manual mode (asks every time).
+# The deny rules keep the key file out of the model's reach. Syntax checks,
+# reading the course workspace and edits inside ~/enshu stay allowed outright,
+# for manual mode (a mock student had 20-30 prompts per hour without them).
 # Reads are denied only for the key (env) and Claude Code's own state, not for
 # all of ~/.config/ai-ta: Claude Code saves a long tool output (a 750 KB `find`,
 # a robot_description) under claude/projects/<session>/tool-results/ and reads
@@ -58,8 +59,7 @@ install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/ta-hook.zsh" "$H
 cat > "$CONF/claude/settings.json" <<'EOF'
 {
   "permissions": {
-    "defaultMode": "default",
-    "disableAutoMode": "disable",
+    "defaultMode": "auto",
     "allow": [
       "Bash(rg:*)", "Bash(grep:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
       "Bash(tail:*)", "Bash(find:*)", "Bash(which:*)",
@@ -68,10 +68,6 @@ cat > "$CONF/claude/settings.json" <<'EOF'
       "Bash(python3 -m py_compile:*)",
       "Read(~/ros2_ws/**)", "Read(//opt/ros/**)",
       "Edit(~/enshu/**)"
-    ],
-    "ask": [
-      "Bash(ros2 run:*)", "Bash(ros2 launch:*)", "Bash(ros2 topic pub:*)",
-      "Bash(ros2 service call:*)", "Bash(ros2 action send_goal:*)"
     ],
     "deny": [
       "Read(~/.config/ai-ta/env)", "Read(~/.config/ai-ta/env.*)",
@@ -102,6 +98,11 @@ path, home = sys.argv[1], sys.argv[2]
 with open(path) as f:
     conf = json.load(f)
 conf.setdefault("projects", {}).setdefault(home, {})["hasTrustDialogAccepted"] = True
+# Auto mode asks once, on the first read outside the working folder, whether
+# to keep allowing such reads; a student who has not seen it waits on it. The
+# course PCs are shared lab machines: reading /tmp, /opt/ros or logs is fine,
+# and the deny rules above still keep the key file and ~/.ssh out.
+conf["hasSeenAutoModeOutsideReadPrompt"] = True
 with open(path, "w") as f:
     json.dump(conf, f, indent=2)
 PY
