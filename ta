@@ -584,11 +584,26 @@ cmd_doctor() {
     esac
   fi
   if docs=$(find_docs); then echo "✓ 演習資料: $docs"; else echo "✗ 演習資料が見つかりません (AITA_DOCS=<.../robot-programming/docs>)"; ok=1; fi
-  if declare -F __aita_prompt >/dev/null 2>&1 || grep -q 'ai-ta/ta-hook.bash' "$HOME/.bashrc" 2>/dev/null; then
-    echo "✓ bash フック (失敗コマンドの記録) 有効"
-  else
-    echo "- bash フック未設定 (install.sh で設定されます)"
-  fi
+  # `ta` runs in bash, so the calling shell is the parent process; when that is
+  # not a shell (`zsh -c 'ta doctor'` execs ta directly), the login shell.
+  local sh; sh=$(ps -o comm= -p "$PPID" 2>/dev/null || true); sh=${sh##*/}; sh=${sh#-}
+  case $sh in bash|zsh|fish|sh|dash|ksh|mksh|tcsh|csh|nu|xonsh|elvish) ;; *) sh=${SHELL##*/} ;; esac
+  case $sh in
+    zsh)
+      if grep -q 'ai-ta/ta-hook.zsh' "$HOME/.zshrc" 2>/dev/null; then
+        echo "✓ zsh フック (失敗コマンドの記録) 有効"
+      else
+        echo "- zsh フック未設定 (install.sh をもう一度実行すると ~/.zshrc に足されます)"
+      fi ;;
+    bash|'')
+      if declare -F __aita_prompt >/dev/null 2>&1 || grep -q 'ai-ta/ta-hook.bash' "$HOME/.bashrc" 2>/dev/null; then
+        echo "✓ bash フック (失敗コマンドの記録) 有効"
+      else
+        echo "- bash フック未設定 (install.sh で設定されます)"
+      fi ;;
+    *)
+      echo "- $sh では失敗コマンドを記録しません (演習は bash で。対応してくれる PR を歓迎します)" ;;
+  esac
   return $ok
 }
 
@@ -740,13 +755,30 @@ if exp:
   fi
 }
 
-# The lines install.sh adds to ~/.bashrc (exact lines, so a student's own
-# lines are never touched).
+# The lines install.sh adds to ~/.bashrc and ~/.zshrc (exact lines, so a
+# student's own lines are never touched).
 readonly BASHRC_LINES=(
   '# AI TA: record failed commands for `ta fix`'
   '[ -f ~/.local/share/ai-ta/ta-hook.bash ] && . ~/.local/share/ai-ta/ta-hook.bash'
   'case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin'
 )
+readonly ZSHRC_LINES=(
+  '# AI TA: record failed commands for `ta fix`'
+  '[ -f ~/.local/share/ai-ta/ta-hook.zsh ] && . ~/.local/share/ai-ta/ta-hook.zsh'
+  'case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin'
+)
+
+# Remove the exact lines $2.. from rc file $1, keeping a backup.
+remove_rc_lines() {
+  local rc=$1; shift
+  [[ -f $rc ]] && grep -qxF -f <(printf '%s\n' "$@") "$rc" || return 0
+  cp -p "$rc" "$rc.ai-ta-backup"
+  # Write in place (cat >) so a symlinked rc file and its mode stay.
+  local kept
+  kept=$(grep -vxF -f <(printf '%s\n' "$@") "$rc" || true)
+  printf '%s\n' "$kept" > "$rc"
+  echo "${rc/#$HOME/\~} から ai-ta の行を消しました"
+}
 
 cmd_uninstall() {
   local yes='' claude='' arg reply site
@@ -764,7 +796,7 @@ cmd_uninstall() {
   [[ -n $site ]] && paths+=("$site/aita_pyhook.py" "$site/aita-pyhook.pth")
   [[ -n $claude ]] && paths+=("$HOME/.local/bin/claude" "$HOME/.local/share/claude")
   echo "AI TA を消します (サーバーにある記録は消えません):"
-  echo "  ~/.bashrc に足した ai-ta の行 (元は ~/.bashrc.ai-ta-backup に残す)"
+  echo "  ~/.bashrc (と ~/.zshrc) に足した ai-ta の行 (元は ~/.bashrc.ai-ta-backup などに残す)"
   local p
   for p in "${paths[@]}"; do
     [[ -e $p || -L $p ]] && echo "  ${p/#$HOME/\~}"
@@ -774,14 +806,8 @@ cmd_uninstall() {
     read -r -p "消しますか? [y/N]: " reply < /dev/tty || reply=
     [[ $reply == [yY]* ]] || { echo "中止しました"; return 1; }
   fi
-  if [[ -f $HOME/.bashrc ]] && grep -qxF -f <(printf '%s\n' "${BASHRC_LINES[@]}") "$HOME/.bashrc"; then
-    cp -p "$HOME/.bashrc" "$HOME/.bashrc.ai-ta-backup"
-    # Write in place (cat >) so a symlinked ~/.bashrc and its mode stay.
-    local kept
-    kept=$(grep -vxF -f <(printf '%s\n' "${BASHRC_LINES[@]}") "$HOME/.bashrc" || true)
-    printf '%s\n' "$kept" > "$HOME/.bashrc"
-    echo "~/.bashrc から ai-ta の行を消しました"
-  fi
+  remove_rc_lines "$HOME/.bashrc" "${BASHRC_LINES[@]}"
+  remove_rc_lines "$HOME/.zshrc" "${ZSHRC_LINES[@]}"
   [[ -n $site ]] && rm -f "$site"/__pycache__/aita_pyhook.*.pyc
   for p in "${paths[@]}"; do
     rm -rf -- "$p"

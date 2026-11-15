@@ -6,7 +6,9 @@
 
 ## 必要なもの
 
-- Ubuntu (bash)．ROS 2 Jazzy と演習資料 (`~/ros2_ws/src/robot-programming`) を入れてあること
+- Ubuntu (bash または zsh)．ROS 2 Jazzy と演習資料 (`~/ros2_ws/src/robot-programming`) を入れてあること
+  - fish など，ほかのシェルには対応していない．演習中はターミナルで `bash` と打って bash で作業する．
+    ほかのシェルに対応させたい人は，AI を使ってぜひ PR を送ってほしい ([ta-hook.zsh](ta-hook.zsh) が参考になる)．
 - インターネット接続
 - GitHub アカウント (演習のアンケートで登録したもの)
 
@@ -14,12 +16,12 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/iory/ai-ta-for-student/main/install.sh | bash
-source ~/.bashrc
+source ~/.bashrc       # zsh なら source ~/.zshrc
 ta login              # 表示されたコードを github.com/login/device に入力して承認する
 ta doctor             # 接続・キー・資料の場所を確認する (全部 ✓ になればよい)
 ```
 
-- `install.sh` は `ta` コマンド，bash のフック，Python の例外を記録するフック，Claude Code (無ければ) を入れる．
+- `install.sh` は `ta` コマンド，bash (と zsh) のフック，Python の例外を記録するフック，Claude Code (無ければ) を入れる．
   中身を見てから入れたいときは `git clone https://github.com/iory/ai-ta-for-student` して `./install.sh` でも同じ．
 - `ta: command not found` と出るときは `~/.local/bin` が PATH に入っていない．
   `export PATH=$HOME/.local/bin:$PATH` を `~/.bashrc` に足す (普通にログインした Ubuntu では自動で入る)．

@@ -29,11 +29,13 @@ BIN=$HOME/.local/bin
 SHARE=$HOME/.local/share/ai-ta
 CONF=$HOME/.config/ai-ta
 HOOK_LINE='[ -f ~/.local/share/ai-ta/ta-hook.bash ] && . ~/.local/share/ai-ta/ta-hook.bash'
+ZSH_HOOK_LINE='[ -f ~/.local/share/ai-ta/ta-hook.zsh ] && . ~/.local/share/ai-ta/ta-hook.zsh'
+PATH_LINE='case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin'
 
 mkdir -p "$BIN" "$SHARE" "$CONF/claude"
 chmod 700 "$CONF"
 install -m 755 "$HERE/ta" "$BIN/ta"
-install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/aita_robot_state.py" "$HERE/VERSION" "$SHARE/"
+install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/ta-hook.zsh" "$HERE/aita_robot_state.py" "$HERE/VERSION" "$SHARE/"
 
 # Claude Code settings for the TA profile only (separate CLAUDE_CONFIG_DIR).
 # defaultMode "default": every command / edit asks the student first. Auto
@@ -117,8 +119,21 @@ echo "Python 例外の記録フックを入れました: $PY_SITE/aita-pyhook.pt
 # Ubuntu's ~/.profile adds ~/.local/bin only if it existed at login, so on a
 # fresh account `ta` is not found until the next login. Add it in ~/.bashrc.
 if ! grep -qF 'ai-ta: ~/.local/bin' "$HOME/.bashrc" 2>/dev/null; then
-  printf '%s\n' 'case :$PATH: in *:$HOME/.local/bin:*) ;; *) export PATH=$HOME/.local/bin:$PATH;; esac  # ai-ta: ~/.local/bin' >> "$HOME/.bashrc"
+  printf '%s\n' "$PATH_LINE" >> "$HOME/.bashrc"
   echo "added ~/.local/bin to PATH in ~/.bashrc"
+fi
+
+# zsh: the same two lines in ~/.zshrc, when zsh is the login shell or a
+# ~/.zshrc exists. Other shells (fish, ...) get nothing: use bash for the course.
+if [[ ${SHELL##*/} == zsh || -f $HOME/.zshrc ]]; then
+  if ! grep -qF 'ai-ta/ta-hook.zsh' "$HOME/.zshrc" 2>/dev/null; then
+    printf '\n# AI TA: record failed commands for `ta fix`\n%s\n' "$ZSH_HOOK_LINE" >> "$HOME/.zshrc"
+    echo "added hook to ~/.zshrc"
+  fi
+  if ! grep -qF 'ai-ta: ~/.local/bin' "$HOME/.zshrc" 2>/dev/null; then
+    printf '%s\n' "$PATH_LINE" >> "$HOME/.zshrc"
+    echo "added ~/.local/bin to PATH in ~/.zshrc"
+  fi
 fi
 
 if ! command -v claude >/dev/null && [[ ! -x $BIN/claude ]]; then
@@ -141,4 +156,4 @@ else
   echo "次に: ta login (GitHub でログインして自分のキーを設定。配られたキーファイルなら ta setup <keyfile>)"
 fi
 echo "ai-ta-for-student $(cat "$SHARE/VERSION") を入れました"
-echo "完了。新しいターミナルを開くか 'source ~/.bashrc' してから 'ta doctor' で確認してください。"
+echo "完了。新しいターミナルを開くか 'source ~/.bashrc' (zsh なら 'source ~/.zshrc') してから 'ta doctor' で確認してください。"
