@@ -12,7 +12,12 @@ fi
 
 __aita_cache=${AITA_CACHE_DIR:-$HOME/.cache/ai-ta}
 __aita_conf=${AITA_CONFIG_DIR:-$HOME/.config/ai-ta}
+# History number of the last command recorded. The first prompt of a new
+# terminal only remembers it: what `history 1` shows there is the last line of
+# ~/.bash_history from an earlier terminal, which was not typed here (a mock
+# student's `ta fix` listed one old failed command 5 times as "recent").
 __aita_last_histnum=
+__aita_first_prompt=1
 
 # Whether the AI TA is in use: a key is set up and has not expired (`ta login`
 # / `ta doctor` write its expiry to $__aita_conf/expires). After the course,
@@ -74,6 +79,11 @@ __aita_prompt() {
   line=$(HISTTIMEFORMAT='' builtin history 1)
   num=${line%%[^ 0-9]*}; num=${num// /}
   cmd=$(sed -E 's/^ *[0-9]+\*? *//' <<< "$line")
+  if [[ -n $__aita_first_prompt ]]; then
+    __aita_first_prompt=
+    __aita_last_histnum=$num
+    return $ec
+  fi
   if [[ -n $num && $num != "$__aita_last_histnum" ]]; then
     __aita_last_histnum=$num
     __aita_record "$ec" "$cmd"

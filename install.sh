@@ -56,6 +56,16 @@ install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/ta-hook.zsh" "$H
 # a robot_description) under claude/projects/<session>/tool-results/ and reads
 # it back from there; denying the whole folder left the TA unable to read its
 # own output ("the saved list could not be read"). Edits stay denied everywhere.
+# The "ask" rules still show a dialog in auto mode ("Ask rule ... overrides
+# auto mode"). They cover what mock students in auto mode saw the TA do
+# unasked and a teacher would not want: editing the course packages and docs
+# under ~/ros2_ws/src (asked to "fix the jedy_skrobot bug", it rewrote
+# interface.py and a docs page), `sudo` (it ran an actuo udev install script),
+# `pip install` (into the course venv, lost on the next rebuild), and the shell
+# start-up files (it tried to add lines to ~/.bashrc / ~/.bash_aliases, which
+# would change every later terminal). Moving the robot is not among them.
+# Edit(...) rules also cover the Write tool (Claude Code warns that Write(...)
+# rules never match).
 cat > "$CONF/claude/settings.json" <<'EOF'
 {
   "permissions": {
@@ -68,6 +78,12 @@ cat > "$CONF/claude/settings.json" <<'EOF'
       "Bash(python3 -m py_compile:*)",
       "Read(~/ros2_ws/**)", "Read(//opt/ros/**)",
       "Edit(~/enshu/**)"
+    ],
+    "ask": [
+      "Edit(~/ros2_ws/src/**)",
+      "Edit(~/.bashrc)", "Edit(~/.bash_aliases)", "Edit(~/.profile)", "Edit(~/.zshrc)",
+      "Bash(sudo:*)", "Bash(*sudo *)",
+      "Bash(*pip install*)", "Bash(*pip3 install*)"
     ],
     "deny": [
       "Read(~/.config/ai-ta/env)", "Read(~/.config/ai-ta/env.*)",
