@@ -11,7 +11,7 @@
 #   ta context            ta fix が送る情報を表示だけする (送信しない)
 #   ta usage              今日の利用額と上限，カメラ画像 AI の同意
 #   ta doctor             サーバー接続・キー・資料の場所を確認
-#   ta login              GitHub でログインして自分のキーを設定 (再実行で発行し直し)
+#   ta login              GitHub でログインして自分のキーを設定 (PC ごと．再実行でこの PC の分を発行し直し)
 #   ta setup <keyfile>    配布されたキーファイルを設定
 #   ta version            入っている版 (更新はインストールのコマンドをもう一度)
 #   ta uninstall [-y]     AI TA を消す (~/.bashrc の行，Python のフック，キー，ta 本体)
@@ -239,7 +239,7 @@ key_override_note() {
   file_key=$(sed -nE "s/^(export +)?AITA_KEY=['\"]?([^'\"]*)['\"]?\$/\2/p" "$AITA_ENV_FILE" 2>/dev/null | tail -1)
   if [[ -n $file_key && $file_key == "$SHELL_AITA_KEY" ]]; then
     same="$env_file のキーと同じ"
-    advice="キーは同じなので，401 ならキー自体が無効 (ta login で発行し直すと前のキーは無効になる)。ta login をやり直し，そのあと開いているターミナルでは 'unset AITA_KEY' する (export された古い値が残るため)。"
+    advice="キーは同じなので，401 ならキー自体が無効 (同じ PC で ta login し直したか，4 台目の PC で ta login してこの PC のキーが消えた)。ta login をやり直し，そのあと開いているターミナルでは 'unset AITA_KEY' する (export された古い値が残るため)。"
   else
     same="$env_file のキーと違う"
     advice="401 の原因は，この古いキーの環境変数の可能性が高い: 'unset AITA_KEY' してから実行し直し，~/.bashrc などの 'export AITA_KEY=' の行を消す (ta login をやり直してもこの環境変数は変わらない)。"
@@ -307,6 +307,14 @@ safety_first() {
     "  4. ta call \"机の番号と状況\" で TA を呼ぶ" >&2
 }
 
+# A key the server refuses (HTTP 401 / 403). Until 0.2.8, `ta login` on a
+# second PC replaced the first PC's key; from 0.2.9 each PC has its own key,
+# up to 3 per student, the oldest going when a 4th logs in.
+key_invalid_die() {
+  die "この PC の AI TA のキーが無効になっています (HTTP $1)。'ta login' をやり直してください。
+  (ta 0.2.8 以前で別の PC で ta login した / 4 台目の PC で ta login して，この PC のキーがいちばん古かった / キーの期限が切れた，のどれかです)"
+}
+
 launch_claude() {
   load_env
   command -v claude >/dev/null || die "claude が見つかりません。install.sh を実行してください"
@@ -317,8 +325,12 @@ launch_claude() {
   fi
   # A spent budget otherwise surfaces as a raw "API Error: 422 Budget has been
   # exceeded!" in English; say what it means and what to do instead.
-  local spent
-  spent=$(curl -s -m 10 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" | python3 -c '
+  # An invalid key otherwise ends Claude Code with no answer and no error.
+  local resp code spent
+  resp=$(curl -s -m 10 -w '\n%{http_code}' "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY" || true)
+  code=${resp##*$'\n'}; resp=${resp%$'\n'*}
+  [[ $code == 401 || $code == 403 ]] && key_invalid_die "$code"
+  spent=$(python3 -c '
 import json, sys
 try:
     i = json.load(sys.stdin)["info"]
@@ -327,7 +339,7 @@ except Exception:
 b = i.get("max_budget")
 if b is not None and (i.get("spend") or 0.0) >= b:
     print(i.get("budget_reset_at") or "")
-' 2>/dev/null || true)
+' <<< "$resp" 2>/dev/null || true)
   if [[ -n $spent ]]; then
     die "今日の AI TA の利用枠を使い切りました (次に使えるのは $(date -d "$spent" '+%m/%d %H:%M' 2>/dev/null || echo "$spent") から)。資料を探すか，'ta call \"机番号と内容\"' で TA を呼んでください"
   fi
@@ -527,9 +539,12 @@ else:
 
 cmd_usage() {
   load_env
-  local info
-  info=$(curl -fsS -m 15 "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY") \
-    || die "利用額を取得できませんでした ($AITA_BASE_URL/key/info)"
+  local info code
+  info=$(curl -sS -m 15 -w '\n%{http_code}' "$AITA_BASE_URL/key/info" -H "Authorization: Bearer $AITA_KEY") \
+    || die "利用額を取得できませんでした ($AITA_BASE_URL/key/info に接続できません)"
+  code=${info##*$'\n'}; info=${info%$'\n'*}
+  [[ $code == 401 || $code == 403 ]] && key_invalid_die "$code"
+  [[ $code == 200 ]] || die "利用額を取得できませんでした ($AITA_BASE_URL/key/info: HTTP $code)"
   python3 -c '
 import json, sys
 i = json.load(sys.stdin)["info"]
@@ -578,7 +593,7 @@ cmd_doctor() {
              fi
              save_key_expiry <<< "$info" || true
            fi ;;
-      401|403) echo "✗ サーバー: $AITA_BASE_URL キーが無効 (HTTP $code)"; ok=1 ;;
+      401|403) echo "✗ サーバー: $AITA_BASE_URL キーが無効 (HTTP $code)。'ta login' をやり直す"; ok=1 ;;
       000) echo "✗ サーバー: $AITA_BASE_URL に接続できません (ネットワーク接続?)"; ok=1 ;;
       *) echo "✗ サーバー: $AITA_BASE_URL HTTP $code"; ok=1 ;;
     esac
@@ -713,7 +728,12 @@ for consent in conf.get("consents") or []:
     answers[consent["kind"]] = {"version": consent["version"], "agree": agree}
     if consent.get("required") and not agree:
         break  # the server records the "no" and issues no key
-status, res = request(f"{server}/api/login", {"github_token": token, "consents": answers})
+# One key per PC (server side, 2026-11-15+): this PC's name keeps the keys of
+# the student's other PCs. The server keeps letters, digits, '_', '.', '-'.
+import socket
+device = socket.gethostname().split(".")[0] or "pc"
+status, res = request(f"{server}/api/login",
+                      {"github_token": token, "consents": answers, "device": device})
 if status != 200:
     fail(status, res)
 old = os.umask(0o077)
@@ -722,9 +742,19 @@ with open(tmp, "w") as f:
     f.write(res["env"])
 os.replace(tmp, env_file)
 os.umask(old)
-what = "発行し直しました (前のキーは無効になりました)" if res.get("replaced_old_key") else "発行しました"
+if "device" not in res:   # a server without per-PC keys
+    what = "発行し直しました (前のキーは無効になりました)" if res.get("replaced_old_key") else "発行しました"
+else:
+    what = (f"この PC ({res['device'] or device}) 用に"
+            + ("発行し直しました" if res.get("replaced_old_key") else "発行しました"))
 print(f"\033[36m[ai-ta]\033[0m {res['student_id']} {res['name']} (GitHub: {res['github']}) のキーを{what}: {env_file}",
       file=sys.stderr)
+if res.get("other_devices"):
+    print("\033[36m[ai-ta]\033[0m ほかの PC のキーもそのまま使えます: " + ", ".join(d or "(名前なし)" for d in res["other_devices"]),
+          file=sys.stderr)
+if res.get("dropped_devices"):
+    print("\033[36m[ai-ta]\033[0m キーは 1 人 3 台までなので，いちばん古い PC のキーを無効にしました: "
+          + ", ".join(d or "(名前なし)" for d in res["dropped_devices"]), file=sys.stderr)
 if res.get("vlm_asked"):
     state = "使えます" if res.get("vlm") else "使えません (同意しなかったため)"
     print(f"\033[36m[ai-ta]\033[0m カメラ画像を AI に送る機能 (vlm-gemini / vlm-er) は{state}", file=sys.stderr)

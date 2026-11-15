@@ -21,6 +21,7 @@ ta login              # 表示されたコードを github.com/login/device に�
 ta doctor             # 接続・キー・資料の場所を確認する (全部 ✓ になればよい)
 ```
 
+- 学科の PC と自分の PC など，1 人 3 台まで，それぞれの PC で `ta login` できる (PC ごとにキーが出る．同じ PC でやり直すとその PC の分だけ発行し直す．4 台目で `ta login` すると，いちばん古い PC のキーが無効になる)．
 - `install.sh` は `ta` コマンド，bash (と zsh) のフック，Python の例外を記録するフック，Claude Code (無ければ) を入れる．
   中身を見てから入れたいときは `git clone https://github.com/iory/ai-ta-for-student` して `./install.sh` でも同じ．
 - `ta: command not found` と出るときは `~/.local/bin` が PATH に入っていない．
