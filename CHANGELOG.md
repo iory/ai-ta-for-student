@@ -2,6 +2,11 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.9 (2026-11-15)
+
+- `ta login` を複数の PC でできるようにした．`ta login` は PC の名前 (ホスト名) をサーバーに送り，サーバーは PC ごとにキーを出す．ほかの PC のキーは無効にならない (今までは，2 台目で `ta login` すると 1 台目のキーが無効になった)．1 人 3 台までで，4 台目で `ta login` すると，いちばん古い PC のキーが無効になる．利用枠はキーごと．
+- キーが無効 (HTTP 401 / 403) のとき，`ta` / `ta fix` / `ta review` / `ta usage` は「この PC の AI TA のキーが無効になっています。'ta login' をやり直してください」と表示して止まる (今までは `ta review` が何も答えずに終わり，`ta usage` は Python のエラーで落ちた)．
+
 ## 0.2.8 (2026-11-15)
 
 - zsh に対応した．`install.sh` は，ログインシェルが zsh か `~/.zshrc` があれば，`~/.zshrc` にも `~/.local/bin` を PATH に足す行と zsh のフック (`ta-hook.zsh`，失敗したコマンドを `ta fix` のために記録する) を足す．`ta uninstall` は `~/.zshrc` の行も消す．`ta doctor` は使っているシェルのフックを確かめる．
