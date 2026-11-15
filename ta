@@ -348,6 +348,13 @@ readonly ARM_DROP_RE='(腕|うで|アーム|手先|ハンド|グリッパ)(が|�
 # 動かしたら Jedy が倒れた」 and 「ボールはつかめたが机から落ちた」 still
 # alert. 物 right after 本/実 is 本物/実物. When unsure, alert.
 readonly OBJECT_FALL_RE='(^|[^本実])(箱|はこ|ボックス|立方体|キューブ|ブロック|コップ|カップ|ボール|球|ペットボトル|ボトル|物体|物)(が|は)[^。．！？!?、，,がはもをてで]{0,4}(落ち|落下|倒れ)'
+# Safety preparation, not an emergency: 「止まらないときは電源を切れる人がいる」
+# (the docs' own checklist wording) and 「倒れないように支える」. Taken out
+# before SAFETY_RE: a 止まらない/暴走 clause that goes on to say who or what
+# stops it, and 倒れ/落ち/挟ま in the negative. 「Ctrl-C しても止まらない」
+# and 「止まらないときがある」 still alert.
+readonly PREPARED_RE='(止まらない|暴走した|暴走する)(とき|時|場合)(は|に|には)?[^。．！？!?]{0,24}(電源|スイッチ|Ctrl-C|ctrl-c|止め|切れ|切る)'
+readonly NEGATED_RE='(倒れ|落ち|挟ま|はさま)(ない|ません)'
 readonly ROBOT_WORD_RE='ロボット|ろぼっと|[Jj]edy|JEDY|ジェディ|実機|台車|本体|機体|サーボ|モータ|腕|うで|アーム|手|指|足|頭|人|自分|私|僕'
 readonly REAL_RE='実機|本物|現実|本番|実際|実物'
 
@@ -357,6 +364,8 @@ safety_hit() {
   local LC_ALL=C.UTF-8
   local text="$*"
   while [[ $text =~ $ARM_DROP_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
+  while [[ $text =~ $PREPARED_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
+  while [[ $text =~ $NEGATED_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
   if [[ ! $text =~ $ROBOT_WORD_RE && ! $text =~ $REAL_RE ]]; then
     while [[ $text =~ $OBJECT_FALL_RE ]]; do text=${text/"${BASH_REMATCH[0]}"/ }; done
   fi
