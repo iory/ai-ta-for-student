@@ -50,6 +50,11 @@ install -m 644 "$HERE/ta-prompt.md" "$HERE/ta-hook.bash" "$HERE/ta-hook.zsh" "$H
 # ~/enshu (the students' own demo folder) are allowed too: building a demo
 # asked 20-30 times per hour, and the mock students switched to accept-all
 # edits, which also covers files outside ~/enshu.
+# Reads are denied only for the key (env) and Claude Code's own state, not for
+# all of ~/.config/ai-ta: Claude Code saves a long tool output (a 750 KB `find`,
+# a robot_description) under claude/projects/<session>/tool-results/ and reads
+# it back from there; denying the whole folder left the TA unable to read its
+# own output ("the saved list could not be read"). Edits stay denied everywhere.
 cat > "$CONF/claude/settings.json" <<'EOF'
 {
   "permissions": {
@@ -69,7 +74,9 @@ cat > "$CONF/claude/settings.json" <<'EOF'
       "Bash(ros2 service call:*)", "Bash(ros2 action send_goal:*)"
     ],
     "deny": [
-      "Read(~/.config/ai-ta/**)",
+      "Read(~/.config/ai-ta/env)", "Read(~/.config/ai-ta/env.*)",
+      "Read(~/.config/ai-ta/claude/.claude.json*)", "Read(~/.config/ai-ta/claude/backups/**)",
+      "Read(~/.config/ai-ta/claude/shell-snapshots/**)", "Read(~/.config/ai-ta/claude/session-env/**)",
       "Edit(~/.config/ai-ta/**)",
       "Read(~/.ssh/**)",
       "Bash(*ai-ta/env*)",
