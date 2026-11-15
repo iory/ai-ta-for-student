@@ -51,6 +51,22 @@ __aita_interrupted() {
   esac
 }
 
+# Every command, failed or not, with its exit code: `ta fix` shows the recent
+# ones, so the AI sees the `colcon build` that failed three commands before
+# the `ls` that failed last (last_failed only ever holds the latest failure).
+# Trimmed to the newest AITA_RECENT_KEEP lines every 50 commands.
+__aita_recent_n=0
+__aita_record() {
+  [[ -d $__aita_cache ]] || mkdir -p "$__aita_cache"
+  # One line per command: a multi-line command (here-doc, loop) is joined.
+  local c=${2//$'\n'/ ⏎ }
+  printf '%s\t%s\t%s\t%s\n' "$1" "$EPOCHSECONDS" "$PWD" "${c//$'\t'/ }" >> "$__aita_cache/recent_cmds"
+  if (( ++__aita_recent_n % 50 == 0 )); then
+    local keep=${AITA_RECENT_KEEP:-100} tmp=$__aita_cache/recent_cmds.$$
+    tail -n "$keep" "$__aita_cache/recent_cmds" > "$tmp" && mv -f "$tmp" "$__aita_cache/recent_cmds"
+  fi
+}
+
 __aita_prompt() {
   local ec=$?
   __aita_active || return $ec
@@ -60,6 +76,7 @@ __aita_prompt() {
   cmd=$(sed -E 's/^ *[0-9]+\*? *//' <<< "$line")
   if [[ -n $num && $num != "$__aita_last_histnum" ]]; then
     __aita_last_histnum=$num
+    __aita_record "$ec" "$cmd"
     if (( ec != 0 )) && ! __aita_interrupted "$ec" "$cmd" && [[ ! $cmd =~ $__aita_ignore_re ]]; then
       mkdir -p "$__aita_cache"
       printf '%s\t%s\t%s\t%s\n' "$ec" "$(date +%s)" "$PWD" "$cmd" > "$__aita_cache/last_failed"

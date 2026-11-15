@@ -2,6 +2,12 @@
 
 版は `VERSION` と git のタグ (`v0.1.0` など) で表す．`ta version` で入っている版を確かめられる．
 
+## 0.2.10 (2026-11-16)
+
+- `ta fix` / `ta context`: 直近 30 分に打ったコマンドを，exit code 付きで新しいものが下になるように送る (フックが `~/.cache/ai-ta/recent_cmds` に新しい 100 件を記録する)．今までは最後に失敗したコマンド 1 つだけで，調べるために打った `ls` などが失敗すると，その前の本当のエラー (`colcon build` など) が分からなかった．
+- `ta fix` / `ta context`: 最新の `colcon build` で失敗したパッケージと，その `stderr.log` の先頭 60 行を送る．ワークスペースは最近 `colcon build` を実行した場所から探す．画面が流れたあとや tmux / byobu を使っていないときでも，ビルドのエラーが AI TA に届く．
+- AI TA への指示: `gz_sim_vendor` の `gz-sim-config.cmake` で `gz-sim8` が見つからないときは，`CMAKE_PREFIX_PATH` に vendor のパスが無いのが原因 (`source /opt/ros/jazzy/setup.bash` し直す)．packages.osrfoundation.org のリポジトリや `libgz-sim8-dev` を入れさせない (Ubuntu の DART パッケージとファイルが衝突し，apt が壊れる)．
+
 ## 0.2.9 (2026-11-15)
 
 - `ta login` を複数の PC でできるようにした．`ta login` は PC の名前 (ホスト名) をサーバーに送り，サーバーは PC ごとにキーを出す．ほかの PC のキーは無効にならない (今までは，2 台目で `ta login` すると 1 台目のキーが無効になった)．1 人 3 台までで，4 台目で `ta login` すると，いちばん古い PC のキーが無効になる．利用枠はキーごと．
